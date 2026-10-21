@@ -61,7 +61,7 @@ function mk(path) {
 }
 const D = { summary: null, uni: null, bySym: new Map() };
 async function universe() {
-  if (!D.uni) { D.uni = await mk('universe.bin'); D.uni.forEach(r => D.bySym.set(r.s, r)); fillCmd(); }
+  if (!D.uni) { D.uni = await mk('universe.bin'); D.uni.forEach(r => D.bySym.set(r.s, r)); SIDX = null; }
   return D.uni;
 }
 function macroRow(s) { for (const rows of Object.values(D.summary.macro)) { const r = rows.find(x => x.s === s); if (r) return r; } return null; }
@@ -449,6 +449,7 @@ function shell() {
   setInterval(() => { if (document.visibilityState === 'visible' && fastPoll > Date.now()) pollLive(); }, 20000);
   setInterval(() => { if (document.visibilityState === 'visible') refreshMeta(); }, 300000);
   $('#cmd').addEventListener('submit', e => { e.preventDefault(); go($('#cmdIn').value); });
+  suggestInit();
   $('#refresh').onclick = refreshNow;
   const stt = $('#stt'), stSet = on => { document.body.classList.toggle('stfull', on); stt.setAttribute('aria-pressed', on); store.set('stfull', on); };
   stt.onclick = () => stSet(!document.body.classList.contains('stfull')); stSet(store.get('stfull', false));
@@ -521,21 +522,105 @@ async function refreshMeta(force = false) {
     }
   } catch {}
 }
-function fillCmd() {
-  const opts = D.uni.map(r => `<option value="${esc(r.s)}">${esc(r.n)}</option>`);
-  for (const rows of Object.values(D.summary.macro)) rows.forEach(r => opts.push(`<option value="${esc(r.s)}">${esc(r.n)}</option>`));
-  $('#cmdList').innerHTML = opts.join('');
+// ---------------------------------------------------------------- search
+// Finds a stock the way moomoo or M+ do: Bursa/SGX short names (SEALINK, KPS, DBS), share codes (5145, D05),
+// tickers (AAPL), any word of the full name (perangsang), initials (tnb) and one typo; best match first,
+// ties go to the more traded stock.
+const fold = t => (t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();  // Telefônica -> telefonica
+const norm = t => fold(t).replace(/[^a-z0-9]/g, '');
+// Nicknames people type that are neither the code nor the exchange short name.
+const ALIAS = { tnb: '5347.KL', mbb: '1155.KL', pbb: '1295.KL', pbbank: '1295.KL', klk: '2445.KL', ioi: '1961.KL', sime: '4197.KL', singtel: 'Z74.SI', capitaland: '9CI.SI', ocbc: 'O39.SI', uob: 'U11.SI', sgx: 'S68.SI' };
+const NOISE = /\b(berhad|bhd|holdings?|group|limited|ltd|inc|incorporated|corp|corporation|plc|company|co|the|tbk|n ?v|s ?a|ag|se)\b/g;
+let SIDX = null;
+function searchIndex() {
+  if (SIDX) return SIDX;
+  const rows = [...(D.uni || []), ...Object.values(D.summary?.macro || {}).flat().filter(r => !D.bySym.has(r.s))];
+  const seen = new Set();
+  SIDX = rows.filter(r => !seen.has(r.s) && seen.add(r.s)).map(r => {
+    const words = fold(r.n).replace(NOISE, ' ').split(/[^a-z0-9&]+/).filter(Boolean);
+    return { r, alias: Object.keys(ALIAS).filter(a => ALIAS[a] === r.s), code: norm(r.s.split('.')[0]), sym: norm(r.s), sn: norm(r.sn), n: norm(r.n), words, ini: words.map(w => w[0]).join(''),
+      liq: Math.min(4, Math.log10(r.valusd || (r.mc || 0) / 1e3 || 1) / 3) };
+  });
+  return SIDX;
+}
+function near(a, b) {  // b is within one typo (swap, missing or extra letter) of the start of a
+  if (!a || b.length < 4) return false;
+  for (const t of [a.slice(0, b.length), a.slice(0, b.length + 1), a.slice(0, b.length - 1)]) {
+    let i = 0, j = 0, e = 0;
+    while (i < t.length && j < b.length && e <= 1) {
+      if (t[i] === b[j]) { i++; j++; continue; }
+      e++;
+      if (t.length > b.length) i++; else if (t.length < b.length) j++; else { i++; j++; }
+    }
+    if (e + (t.length - i) + (b.length - j) <= 1) return true;
+  }
+  return false;
+}
+function findStocks(q, max = 12) {
+  const k = norm(q.trim().replace(/^(myx|bursa|klse|sgx|ses|nasdaq|nyse|amex)\s*:\s*/i, '').replace(/\.(kl|si)$/i, ''));
+  if (!k) return [];
+  const out = [];
+  for (const x of searchIndex()) {
+    const s = x.code === k || x.sym === k ? 100 : x.n === k ? 97 : x.sn === k || x.alias.includes(k) ? 96 : x.code.startsWith(k) ? 85 : x.sn.startsWith(k) ? 80
+      : x.words.includes(k) ? 75 : x.words.some(w => w.startsWith(k)) ? 70 : x.n.startsWith(k) ? 65 : k.length >= 2 && x.ini.length > 1 && x.ini.startsWith(k) ? 55
+      : x.sn.includes(k) || x.n.includes(k) ? 45 : near(x.sn, k) || x.words.some(w => near(w, k)) ? 25 : 0;
+    if (s) out.push([s + x.liq, x.r]);
+  }
+  return out.sort((a, b) => b[0] - a[0]).slice(0, max).map(x => x[1]);
+}
+const symOf = v => { v = (v || '').trim(); return v ? findStocks(v, 1)[0]?.s || v.toUpperCase() : ''; };
+const mkOf = s => s.startsWith('^') ? 'Index' : s.endsWith('=F') ? 'Futures' : s.endsWith('=X') ? 'FX' : s.endsWith('-USD') ? 'Crypto'
+  : ({ KL: 'MY', SI: 'SG', T: 'JP', HK: 'HK', SS: 'CN', SZ: 'CN', TW: 'TW', KS: 'KR', AX: 'AU', TO: 'CA', L: 'UK', JK: 'ID' })[s.split('.')[1]] || (s.includes('.') ? s.split('.').pop() : 'US');
+// One dropdown serves every input marked data-suggest (header search, watchlist, paper ticket, journal).
+const SG = { box: null, input: null, items: [], i: -1 };
+function suggestInit() {
+  const box = SG.box = Object.assign(document.createElement('div'), { id: 'sugg', className: 'sugg', hidden: true });
+  box.setAttribute('role', 'listbox'); document.body.append(box);
+  const close = () => { box.hidden = true; SG.items = []; SG.i = -1; };
+  const place = () => {
+    const r = SG.input.getBoundingClientRect(), w = Math.min(innerWidth - 16, Math.max(r.width, 420));
+    Object.assign(box.style, { top: `${r.bottom + 2}px`, left: `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`, width: `${w}px` });
+  };
+  const draw = () => {
+    const q = SG.input.value.trim();
+    if (!q) return close();
+    box.innerHTML = SG.items.map((r, i) => { const code = /\.(KL|SI)$/.test(r.s) ? r.s.split('.')[0] : r.s;
+      return `<div class="si ${i === SG.i ? 'on' : ''}" data-i="${i}" role="option"><span class="sn">${esc(r.sn || code)}</span><span class="cd">${r.sn ? esc(code) : ''}</span><span class="mk">${esc(mkOf(r.s))}</span><span class="nm">${esc(r.n || '')}</span>${badge(r.st)}<span class="sp">${px(r.px)} ${pct(r.r1)}</span></div>`; }).join('')
+      || `<div class="si none">No match for “${esc(q)}”. Try the share code (5145), the Bursa/SGX short name (SEALINK) or a word from the company name.</div>`;
+    box.hidden = false; place();
+    box.querySelector('.si.on')?.scrollIntoView({ block: 'nearest' });
+  };
+  const pick = r => {
+    if (!r) return;
+    const t = SG.input; close();
+    if (t.id === 'cmdIn') { t.value = ''; t.blur(); location.hash = `stock/${encodeURIComponent(r.s)}`; }
+    else { t.value = r.s; t.dispatchEvent(new Event('change', { bubbles: true })); }
+  };
+  document.addEventListener('input', async e => {
+    if (!e.target.matches?.('[data-suggest]')) return;
+    SG.input = e.target; await universe();
+    SG.items = findStocks(e.target.value); SG.i = SG.items.length ? 0 : -1; draw();
+  });
+  document.addEventListener('focusin', e => { if (e.target.matches?.('[data-suggest]')) universe().catch(() => {}); });  // load the list before the first key
+  document.addEventListener('keydown', e => {
+    if (box.hidden || e.target !== SG.input) return;
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && SG.items.length) { e.preventDefault(); SG.i = (SG.i + (e.key === 'ArrowDown' ? 1 : -1) + SG.items.length) % SG.items.length; draw(); }
+    else if (e.key === 'Escape') close();
+    else if (e.key === 'Enter' && SG.i >= 0) { e.preventDefault(); pick(SG.items[SG.i]); }
+  }, true);
+  box.addEventListener('pointerdown', e => { const el = e.target.closest('[data-i]'); if (el) { e.preventDefault(); pick(SG.items[+el.dataset.i]); } });
+  document.addEventListener('focusout', e => { const t = e.target; if (t === SG.input) setTimeout(() => { if (SG.input === t && document.activeElement !== t) close(); }, 150); });
+  addEventListener('resize', () => { if (!box.hidden) place(); });
+  addEventListener('hashchange', close);
 }
 async function go(q) {
   q = q.trim(); if (!q) return;
   const tab = TABS.find(t => t[1].toLowerCase() === q.toLowerCase() || t[0] === q.toLowerCase());
   if (tab) { location.hash = tab[0]; $('#cmdIn').value = ''; return; }
   await universe();
-  const U = q.toUpperCase();
-  const all = [...D.uni, ...Object.values(D.summary.macro).flat()];
-  const hit = all.find(r => r.s === U) || all.find(r => r.s.split('.')[0] === U) || all.find(r => r.s === U + '.KL' || r.s === U + '.SI')
-    || all.find(r => (r.n || '').toUpperCase().startsWith(U)) || all.find(r => (r.n || '').toUpperCase().includes(U));
-  location.hash = `stock/${encodeURIComponent(hit ? hit.s : U)}`;
+  const hit = findStocks(q, 1)[0];
+  if (!hit && !/^[A-Za-z0-9.^=-]{1,12}$/.test(q)) return toast(`No stock matches “${q}”. Try the share code or short name.`);
+  location.hash = `stock/${encodeURIComponent(hit ? hit.s : q.toUpperCase())}`;
   $('#cmdIn').value = ''; $('#cmdIn').blur();
 }
 async function route(keep = false) {
@@ -1017,7 +1102,7 @@ VIEWS.wl = async (_, main) => {
   const moo = await readData('moomoo.bin').catch(() => null);
   const rows = wlItems().map(w => ({ w, r: D.bySym.get(w.s) || macroRow(w.s) }));
   main.innerHTML = `<div class="grid wide">${panel(`${esc(ME.name)}'s watchlist`, `
-    <form class="row pb" id="wlAdd"><input class="f sp" id="wlIn" list="cmdList" placeholder="Add ticker: AAPL, 5347.KL, D05.SI, 7203.T" autocapitalize="characters"><button class="btn">ADD</button></form>
+    <form class="row pb" id="wlAdd"><input class="f sp" id="wlIn" data-suggest autocomplete="off" placeholder="Add: code, short name or company (5145, SEALINK, AAPL, DBS)" autocapitalize="characters"><button class="btn">ADD</button></form>
     <div class="tw"><table><thead><tr><th>Ticker</th><th class="l">Name</th><th class="l">Status</th><th>Last</th><th>1D</th><th>1W</th><th>1M</th><th>RSI</th><th class="l">Bias</th><th>↑1W</th><th>↑1M</th>
       <th title="Push alert when price goes above">Alert ≥</th><th title="Push alert when price goes below">Alert ≤</th><th class="l">Notes</th><th></th></tr></thead><tbody>
     ${rows.map(({ w, r }) => `<tr data-s="${esc(w.s)}"><td class="l"><a class="sym" href="#stock/${encodeURIComponent(w.s)}">${esc(w.s)}</a></td><td class="nm l">${esc(r?.n || w.n)}</td>
@@ -1033,8 +1118,7 @@ VIEWS.wl = async (_, main) => {
     </div>`;
   $('#wlAdd').onsubmit = e => {
     e.preventDefault();
-    const raw = $('#wlIn').value.trim().toUpperCase(); if (!raw) return;
-    const s = U.find(r => r.s === raw)?.s || U.find(r => r.s.split('.')[0] === raw)?.s || raw;
+    const s = symOf($('#wlIn').value); if (!s) return;
     if (!inWl(s)) toggleWl(s, U.find(r => r.s === s)?.n);
     route(true);
   };
@@ -1284,7 +1368,7 @@ VIEWS.paper = async (arg, main) => {
       ${eq.length > 1 ? spark(eq.map(e => e.v)) : ''}
       <p class="pb note">Virtual money for practice. Prices: live quotes when available, otherwise the latest close; Bursa/SGX quotes lag ~15 min. Fees ${pa.fee}% per trade. ${P().shariahOnly ? 'Shariah-only mode: buying non-compliant (F) stocks is blocked; no short selling or margin.' : 'Shariah-only mode is off (Settings).'} Zakat shown as the simple trading-shares method; ask your scholar for your case.</p>`, '', 'span')}
     ${panel('Order ticket', `<form class="pb ticket" id="tk">
-      <div class="form"><label>Stock<input class="f" id="tkS" list="cmdList" value="${esc(sym || '')}" placeholder="AAPL, 5347.KL…" autocapitalize="characters" required></label>
+      <div class="form"><label>Stock<input class="f" id="tkS" data-suggest autocomplete="off" value="${esc(sym || '')}" placeholder="AAPL, 5347.KL…" autocapitalize="characters" required></label>
       <label>Side<span class="seg"><button type="button" data-side="buy" class="on buy">BUY</button><button type="button" data-side="sell">SELL</button></span></label>
       <label>Type<span class="seg">${['market', 'limit', 'stop'].map((t, i) => `<button type="button" data-type="${t}" class="${i ? '' : 'on t'}">${t.toUpperCase()}</button>`).join('')}</span></label>
       <label>Quantity (shares)<input class="f" id="tkQ" inputmode="decimal" placeholder="e.g. 100 (US: fractions OK)" value="${+preQty > 0 ? +preQty : ''}"></label>
@@ -1303,7 +1387,7 @@ VIEWS.paper = async (arg, main) => {
   // ticket
   const T = { side: 'buy', type: 'market' };
   const info = () => {
-    const s = $('#tkS').value.trim().toUpperCase(), q = quoteOf(s), qty = +$('#tkQ').value || 0;
+    const s = symOf($('#tkS').value), q = quoteOf(s), qty = +$('#tkQ').value || 0;
     const p = T.type === 'market' ? q?.px : +$('#tkPx').value;
     const cost = q && p ? PT.convert(qty * p, q.cur, B, fx) : null;
     $('#tkInfo').innerHTML = q ? `${esc(q.n)} ${badge(q.st)} · last ${px(q.px)} ${esc(q.cur)} · board lot ${PT.LOT(s)} · est. ${cost == null ? '–' : m(cost)} + fee` : (s ? 'Unknown ticker: pick one from the list.' : '');
@@ -1314,7 +1398,7 @@ VIEWS.paper = async (arg, main) => {
   ['tkS', 'tkQ', 'tkPx'].forEach(id => $(`#${id}`).oninput = info); info();
   $('#tk').onsubmit = e => {
     e.preventDefault();
-    const s = $('#tkS').value.trim().toUpperCase(), q = quoteOf(s);
+    const s = symOf($('#tkS').value), q = quoteOf(s);
     const o = { id: PT.rid(), s, side: T.side, type: T.type, q: +$('#tkQ').value, px: T.type === 'market' ? null : +$('#tkPx').value, at: now(), u: now(), status: 'open', d0: q?.d };
     const err = !q ? 'Unknown ticker or no price yet.' : PT.check(pa, o, q, fx, { shariahOnly: P().shariahOnly, status: q.st });
     if (err) { $('#tkErr').textContent = err; return; }
@@ -1360,7 +1444,7 @@ VIEWS.notes = async (_, main) => {
   const jr = ST.journal.filter(j => !j.del).sort((a, b) => (b.d + b.at).localeCompare(a.d + a.at));
   main.innerHTML = `<div class="row" style="margin-bottom:10px"><input class="f sp" id="nq" placeholder="Search notes and journal" value="${esc(q)}"></div>
     <div class="grid wide">
-    ${panel('Trading journal', `<form class="pb" id="jf" style="display:grid;gap:8px"><div class="form"><label>Date<input class="f" type="date" id="jd" value="${now().slice(0, 10)}"></label><label>Ticker (optional)<input class="f" id="js" list="cmdList" autocapitalize="characters"></label></div>
+    ${panel('Trading journal', `<form class="pb" id="jf" style="display:grid;gap:8px"><div class="form"><label>Date<input class="f" type="date" id="jd" value="${now().slice(0, 10)}"></label><label>Ticker (optional)<input class="f" id="js" data-suggest autocomplete="off" autocapitalize="characters"></label></div>
       <textarea class="f" id="jt" rows="3" placeholder="What I did, why, how I felt, what I learned…" required></textarea><button class="btn">ADD ENTRY</button></form>
       <ul class="list" id="jl">${jr.map(j => `<li data-q="${esc((j.t + ' ' + (j.s || '')).toLowerCase())}"><small>${esc(j.d)}${j.s ? ` · <a href="#stock/${encodeURIComponent(j.s)}">${esc(j.s)}</a>` : ''}</small> <button class="btn sm ghost" style="float:right" data-del="${esc(j.id)}">✕</button><br>${esc(j.t).replace(/\n/g, '<br>')}</li>`).join('') || '<li class="muted">No entries yet. Reviewing a journal every Sunday with the weekly report is the fastest way to improve.</li>'}</ul>`)}
     ${panel('Stock notes', `<ul class="list" id="nl">${notes.map(([s, v]) => `<li data-q="${esc((s + ' ' + (v.n || '') + ' ' + v.t).toLowerCase())}"><a class="sym" href="#stock/${encodeURIComponent(s)}">${esc(s)}</a> <span class="note">${esc(v.n || '')} · ${esc(v.u ? sgt(v.u) : '')}</span><br>${esc(v.t).replace(/\n/g, '<br>')}</li>`).join('') || '<li class="muted">Write notes on any stock page; they appear here.</li>'}</ul>`)}
@@ -1369,7 +1453,7 @@ VIEWS.notes = async (_, main) => {
   $('#nq').oninput = filt; filt();
   $('#jf').onsubmit = e => {
     e.preventDefault();
-    ST.journal.push({ id: PT.rid(), d: $('#jd').value, s: $('#js').value.trim().toUpperCase() || null, t: $('#jt').value.trim(), at: now(), u: now() });
+    ST.journal.push({ id: PT.rid(), d: $('#jd').value, s: symOf($('#js').value) || null, t: $('#jt').value.trim(), at: now(), u: now() });
     saveState(); route(true);
   };
   $$('[data-del]', main).forEach(b => b.onclick = () => { Object.assign(ST.journal.find(j => j.id === b.dataset.del), { del: true, u: now() }); saveState(); route(true); });

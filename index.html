@@ -14,11 +14,11 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-180.png">
-<link rel="stylesheet" href="style.css?v=20261021155407">
+<link rel="stylesheet" href="style.css?v=20261021160521">
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" integrity="sha384-stKllnUqA9AD0gsKCuUtf5XlqAW7PwIgDagoNsTWkjkBmJ/GZ/uHTgEBxdLV2VSK" crossorigin="anonymous" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js" integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous" defer></script>
-<script type="module" src="app.js?v=20261021155407"></script>
+<script type="module" src="app.js?v=20261021160521"></script>
 </head>
 <body>
 <div id="login" class="login" hidden>
@@ -38,8 +38,7 @@
   <header class="top">
     <a class="brand" href="#mkt"><span class="logo">AMA</span><span class="brand-t">STOCK SCREENER</span></a>
     <form id="cmd" class="cmd" autocomplete="off">
-      <input id="cmdIn" list="cmdList" placeholder="Ticker or name: AAPL, 5347, D05, Press Metal" aria-label="Go to ticker" enterkeyhint="go">
-      <datalist id="cmdList"></datalist>
+      <input id="cmdIn" data-suggest autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Code, short name or company: 5145, SEALINK, Maybank, AAPL, DBS" aria-label="Search stocks" enterkeyhint="go">
       <button type="submit">GO</button>
     </form>
     <button id="stt" class="stt" aria-pressed="false" title="Show what the Shariah letters mean (C = Certified, P = Passes screen, R = Review, F = Non-compliant)">C·P·F</button>

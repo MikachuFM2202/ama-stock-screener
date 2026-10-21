@@ -216,9 +216,9 @@ def build_universe():
     uni = {}
     for q in screen('KLS', 1e6, 1500):  # every Bursa stock Yahoo lists (~1,050)
         code = q['symbol'].split('.')[0]
-        uni[q['symbol']] = {'m': 'MY', 'n': q.get('longName') or q.get('shortName'), 'sc': code in sc['codes']}
+        uni[q['symbol']] = {'m': 'MY', 'n': q.get('longName') or q.get('shortName'), 'sn': q.get('shortName'), 'sc': code in sc['codes']}  # sn = Bursa short name (SEALINK)
     for q in screen('SES', 1e6, 1000):  # every SGX stock Yahoo lists (~520)
-        uni[q['symbol']] = {'m': 'SG', 'n': q.get('longName') or q.get('shortName')}
+        uni[q['symbol']] = {'m': 'SG', 'n': q.get('longName') or q.get('shortName'), 'sn': q.get('shortName')}  # SGX short name (DBS)
     for ex in ('NMS', 'NYQ'):
         for q in screen(ex, 2e9, 1500):  # US mid and large caps > US$2b (~2,000)
             uni[q['symbol'].replace('.', '-')] = {'m': 'US', 'n': q.get('longName') or q.get('shortName')}
@@ -930,7 +930,7 @@ def main():
 
     uni = cache_get('universe-v2.json')  # v2 (2026-10-21): whole Bursa/SGX + US > $2b; the new name forces one rebuild
     sc = cache_get('sc.json', {})
-    if MODE == 'weekly' or not uni:
+    if MODE == 'weekly' or not uni or not any(u.get('sn') for u in uni.values()):  # sn added 2026-10-22
         uni, sc = build_universe()
         cache_put('universe-v2.json', uni)
     print('universe', len(uni))
@@ -975,7 +975,7 @@ def main():
         st, why = classify(u, f)
         cur = f.get('currency') or ('MYR' if u['m'] == 'MY' else 'SGD' if u['m'] == 'SG' else 'USD')
         rate = 1 if cur == 'USD' else fx.get(cur)
-        rows.append({'s': s, 'n': f.get('longName') or u.get('n') or s, 'm': u['m'], 'st': st, 'why': why, 'sec': f.get('sector'), 'ind': f.get('industry'),
+        rows.append({'s': s, 'n': f.get('longName') or u.get('n') or s, 'sn': u.get('sn'), 'm': u['m'], 'st': st, 'why': why, 'sec': f.get('sector'), 'ind': f.get('industry'),
                      'cur': cur, 'mc': f.get('marketCap'), 'pe': f.get('trailingPE'), 'fpe': f.get('forwardPE'), 'pb': f.get('priceToBook'),
                      'roe': f.get('returnOnEquity'), 'pm': f.get('profitMargins'), 'rg': f.get('revenueGrowth'), 'dy': f.get('dividendYield'),
                      'beta': f.get('beta'), 'dm': (f.get('totalDebt') or 0) / f['marketCap'] if f.get('marketCap') and f.get('totalDebt') is not None else None,

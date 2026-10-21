@@ -299,3 +299,11 @@ body.stfull .badge i { display: inline; }
 .faq details { border-bottom: 1px solid var(--line); padding: 8px 0; } .faq summary { cursor: pointer; font-weight: 600; } .faq p { margin: 8px 0 0; color: var(--muted); }
 table.wrap td { white-space: normal; min-width: 140px; vertical-align: top; }
 .mcat { margin-bottom: 4px; }
+/* search suggestions (one dropdown for every data-suggest input) */
+.sugg { position: fixed; z-index: 70; max-height: min(60vh, 520px); overflow-y: auto; background: var(--panel); border: 1px solid var(--navy2); box-shadow: 0 10px 30px #000c; }
+.si { display: grid; grid-template-columns: minmax(70px, auto) auto auto minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 8px 10px; cursor: pointer; border-bottom: 1px solid var(--line); font: 13px var(--mono); }
+.si.on, .si:hover { background: var(--panel2); box-shadow: inset 3px 0 0 var(--glow); }
+.si .sn { font-weight: 700; color: var(--text); } .si .cd { color: var(--amber); } .si .mk { color: var(--muted); font-size: 11px; border: 1px solid var(--line2); padding: 0 4px; }
+.si .nm { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .si .sp { font-size: 12px; white-space: nowrap; }
+.si.none { display: block; color: var(--muted); cursor: default; }
+@media (max-width: 760px) { .si { grid-template-columns: auto auto auto minmax(0, 1fr) auto; } .si .sp { display: none; } }
