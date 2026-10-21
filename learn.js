@@ -315,7 +315,7 @@ ${box('Golden rule', 'No forecast replaces a plan: know your entry, your stop an
   { id: 'hosting', t: '15 · Hosting, encryption & privacy', lvl: 'Setup', html: `
 <h2>How your data is protected</h2>
 <ul><li>The family password is turned into a 256-bit key with PBKDF2-SHA256 (310,000 rounds). Every file (market data, reports, profiles, watchlists, notes, paper trades, the sync token) is encrypted with AES-256-GCM before it leaves the GitHub server or your device. GitHub only ever stores ciphertext.</li>
-<li>The repository is public (free GitHub Pages needs that), so <b>anyone can download the encrypted files and try passwords offline</b>. The password is the only real protection. "mikachufm2202" matches the GitHub username, so it's easy to guess: switch to a long passphrase (4+ random words) with <code>local/rotate_password.py</code> (see the README).</li>
+<li>The repository is public (free GitHub Pages needs that), so <b>anyone can download the encrypted files and try passwords offline</b>. The password is the only real protection. If it is short or guessable (for example your username), switch to a long passphrase (4+ random words) with <code>local/rotate_password.py</code> (see the README).</li>
 <li>Profile PINs are a lock on the door, not a safe: anyone with the family password could read every profile. That's fine for a family; it isn't for strangers.</li>
 <li>The GitHub token is fine-grained to this one repository and stored encrypted. Revoke it on GitHub any time; the site keeps working read-only.</li>
 <li>"Remember on this device" stores the derived key in the browser. Use "Lock this device" in Settings on shared computers.</li></ul>
