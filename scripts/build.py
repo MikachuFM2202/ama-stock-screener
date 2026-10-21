@@ -402,7 +402,7 @@ RELEVANT = re.compile(
 JUNK = re.compile(
     r'\b(medal|olympic|league|tournament|championship|world cup|fifa|match|goal|striker|badminton|football|soccer|cricket|tennis|golf|f1|formula 1|nba|nfl|'
     r'celebrity|actor|actress|singer|concert|movie|film|drama series|k-?pop|album|recipe|horoscope|zodiac|wedding|dating|fashion|beauty|makeup|skincare|'
-    r'murder\w*|stabb\w*|rape|molest\w*|kidnap\w*|missing child|lottery|toto|giveaway|prank|reaction|vlog|unboxing|mukbang|food review|travel guide|'
+    r'murder\w*|stabb\w*|rape|molest\w*|kidnap\w*|missing child|lottery|toto|giveaway|prank|reacts?|reaction|tiktoks?|marry|marriage|divorce|vlog|unboxing|mukbang|food review|travel guide|'
     r'event highlights?|behind the scenes)\b|#shorts', re.I)
 
 
