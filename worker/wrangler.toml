@@ -1,0 +1,7 @@
+name = "ama-live"
+main = "index.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+ALLOW_ORIGIN = "https://mikachufm2202.github.io"
+# Set the shared key as a secret, never here:  npx wrangler secret put KEY

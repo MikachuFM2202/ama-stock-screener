@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Builds the encrypted market snapshot that the site reads from the `market` branch.
 
-Usage: build.py daily|evening|weekly   (weekly also refreshes the universe and fundamentals)
-Env:   SITE_PASSWORD (required), OUT (output dir, default ./out), STATE (path to the data branch's
-       state.bin, optional), LLM_API_KEY (+ optional LLM_BASE_URL, LLM_MODEL) for the AI reports,
-       LIMIT (cap tickers per market, for quick local tests).
+Usage: build.py daily|evening|weekly|live|testpush   (weekly also refreshes the universe and fundamentals;
+       live only refreshes quotes + breaking news into LIVE_OUT, every ~10 minutes)
+Env:   SITE_PASSWORD (required), OUT (market branch dir, default ./out), DATA (data branch checkout with
+       profiles.bin and p/<id>.bin, optional), LIVE_OUT (live branch dir), LLM_API_KEY (+ optional LLM_BASE_URL,
+       LLM_MODEL) for the AI reports, LIMIT (cap tickers per market, for quick local tests).
 
 Every file except meta.json and cache/ is AES-256-GCM encrypted with a key derived from the site
 password (PBKDF2-SHA256), gzip'd JSON inside. The site derives the same key at login.
@@ -366,8 +367,8 @@ NEWS_Q = [('Global', 'stock market today'), ('US', 'Wall Street stocks Fed'), ('
           ('Islamic finance', 'shariah compliant stocks OR islamic finance'), ('Asia', 'Asian markets stocks')]
 
 
-def gnews(q, n=8, days=1):
-    r = http(f'https://news.google.com/rss/search?q={requests.utils.quote(q)}+when:{days}d&hl=en-SG&gl=SG&ceid=SG:en')
+def gnews(q, n=8, days=1, when=None):
+    r = http(f'https://news.google.com/rss/search?q={requests.utils.quote(q)}+when:{when or f"{days}d"}&hl=en-SG&gl=SG&ceid=SG:en')
     f = feedparser.parse(r.content if r else b'')
     out = []
     for e in f.entries[:n]:
@@ -599,21 +600,78 @@ def template_report(kind, s, appendix=False):
     return '\n'.join(L)
 
 
+# ---------------------------------------------------------------- family profiles (data branch)
+
+DATA = Path(os.environ.get('DATA', 'datadir'))
+NOTIFY_DEFAULTS = {'daily': True, 'weekly': True, 'alerts': True, 'moves': True, 'orders': True, 'breaking': False}
+
+
+def alive(items): return [x for x in items or [] if not x.get('del')]
+
+
+def load_profiles():
+    """[(profile index entry, profile state)] for every family member. Unreadable files are skipped, not fatal."""
+    try: idx = unseal((DATA / 'profiles.bin').read_bytes()).get('list', [])
+    except Exception: return []
+    out = []
+    for p in idx:
+        if not re.fullmatch(r'[a-z0-9]{1,24}', str(p.get('id', ''))) or p.get('del'): continue
+        try: st = unseal((DATA / 'p' / f'{p["id"]}.bin').read_bytes())
+        except Exception: st = {}
+        out.append((p, st))
+    return out
+
+
+def prefs(st):
+    pr = st.get('prefs') or {}
+    return {'move': float(pr.get('move') or 5) / 100, 'notify': {**NOTIFY_DEFAULTS, **(pr.get('notify') or {})}}
+
+
+def positions(st):
+    """Net paper-trading quantity per symbol (trades are the source of truth; see paper.js)."""
+    q = {}
+    pa = st.get('paper') or {}
+    for t in pa.get('trades', []):
+        if t.get('at', '') >= pa.get('resetAt', ''):
+            q[t['s']] = q.get(t['s'], 0) + (t['q'] if t['side'] == 'buy' else -t['q'])
+    return {s: v for s, v in q.items() if v > 0}
+
+
+def open_orders(st):
+    pa = st.get('paper') or {}
+    return [o for o in pa.get('orders', []) if o.get('status') == 'open' and o.get('at', '') >= pa.get('resetAt', '')]
+
+
+def family_symbols(profs):
+    syms = {}
+    for _, st in profs:
+        for w in alive(st.get('wl')): syms.setdefault(w['s'], w.get('n') or w['s'])
+        for s in positions(st): syms.setdefault(s, s)
+        for o in open_orders(st): syms.setdefault(o['s'], o['s'])
+    return syms
+
+
+def write_push(jobs):
+    jobs = [j for j in jobs if j['subs'] and j['msgs']]
+    if jobs: Path(os.environ.get('PUSH_OUT', 'push.json')).write_text(json.dumps({'jobs': jobs}))
+
+
 # ---------------------------------------------------------------- main
 
 def main():
     global META, AES
     META, AES = _key()
     (OUT / 'cache').mkdir(parents=True, exist_ok=True)
-    state = {}
-    if os.environ.get('STATE') and Path(os.environ['STATE']).exists():
-        try: state = unseal(Path(os.environ['STATE']).read_bytes())
-        except Exception as e: print('state unreadable', e)
-    wl = state.get('wl', [])
+    profs = load_profiles()
     if MODE == 'testpush':
-        Path(os.environ.get('PUSH_OUT', 'push.json')).write_text(json.dumps({'subs': state.get('subs', []), 'msgs': [
-            {'title': 'Halal Terminal test', 'body': f'Notifications work on this device · {NOW:%H:%M} SGT', 'url': '#settings', 'tag': 'test'}]}))
+        who = os.environ.get('PROFILE', '')
+        write_push([{'subs': st.get('subs', []), 'msgs': [{'title': 'AMA Stock Screener test', 'body': f'Notifications work for {p["name"]} · {NOW:%H:%M} SGT', 'url': '#settings', 'tag': 'test'}]}
+                    for p, st in profs if not who or p['id'] == who])
         return
+    if MODE == 'live':
+        return live_main(profs)
+    fam = family_symbols(profs)
+    wl = [{'s': s, 'n': n} for s, n in fam.items()]
 
     uni = cache_get('universe.json')
     sc = cache_get('sc.json', {})
@@ -638,12 +696,13 @@ def main():
             uni[w['s']] = {'m': mk, 'n': f.get('longName') or w['s'], 'sc': mk == 'MY' and w['s'].split('.')[0] in sc.get('codes', []), 'wl': 1}
 
     macro_syms = [s for g in MACRO.values() for s, _ in g]
-    curr = {((fund.get(s) or {}).get('currency') or '').upper() for s in uni} - {'', 'USD'}  # GBp (pence) -> GBP, x100 below
+    curr = ({((fund.get(s) or {}).get('currency') or '').upper() for s in uni} | {'SGD', 'MYR'}) - {'', 'USD'}  # GBp (pence) -> GBP, x100 below
     fx_syms = [f'{c}=X' for c in curr if c.isalpha() and len(c) == 3]
     P = download(list(uni) + macro_syms + fx_syms)
     I = indicators(P)
     have = [s for s in I['C'].columns if I['C'][s].notna().sum() > 30]
-    fx = {c: float(I['C'][f'{c}=X'].dropna().iloc[-1]) for c in curr if f'{c}=X' in have}
+    fx = {c: float(I['C'][f'{c}=X'].dropna().iloc[-1]) for c in curr | {'SGD', 'MYR'} if f'{c}=X' in have}
+    fx['USD'] = 1.0
     if 'GBP' in fx: fx['GBp'] = fx['GBP'] * 100
 
     groups = {'MY': [], 'SG': [], 'US': [], 'GL': [], 'MACRO': [s for s in macro_syms if s in have]}
@@ -727,7 +786,7 @@ def main():
                'cal': {g: {str(h): t for h, t in c.items()} for g, c in cal.items()},
                'sc': {k: sc.get(k) for k in ('asof', 'url', 'patched')}, 'counts': count(rows),
                'calendar': calendar(), 'earnings': earnings, 'news': news([by[w['s']] for w in wl if w['s'] in by] + [{'s': w['s'], 'n': w['s']} for w in wl if w['s'] not in by]),
-               'media': media(old.get('media')), 'reports': old.get('reports', [])}
+               'media': media(old.get('media')), 'reports': old.get('reports', []), 'fx': fx}
 
     if MODE in ('daily', 'weekly'):
         rep = write_report(MODE, summary, rows, wl)
@@ -745,7 +804,7 @@ def main():
         put(f'ohlc/{fname(s)}.bin', {'t': [int(t.timestamp()) for t in idx], **{k[0].lower(): P[k][s].reindex(idx).round(6).tolist() for k in ('Open', 'High', 'Low', 'Close', 'Volume')}})
     META['at'] = NOW.isoformat()
     (OUT / 'meta.json').write_text(json.dumps(META))
-    notify(state, summary, by, rows)
+    notify(profs, summary, by)
     print('done', MODE)
 
 
@@ -759,28 +818,125 @@ def count(rows):
     return c
 
 
-def notify(state, summary, by, rows):
-    """Writes push.json for scripts/push.mjs: report-ready pings plus watchlist price alerts (each fired once per day)."""
-    subs = state.get('subs', [])
-    if not subs: return
+def notify(profs, summary, by):
+    """Queues push messages per family member, following each profile's notification settings."""
     sent = cache_get('alerts.json', {})
     today = NOW.date().isoformat()
-    msgs = []
-    if MODE in ('daily', 'weekly') and summary['reports']:
-        r = summary['reports'][0]
-        msgs.append({'title': 'Weekly report is ready' if MODE == 'weekly' else 'Daily brief is ready', 'body': f'{NOW:%a %d %b} · tap to read', 'url': f'#reports/{r["id"]}', 'tag': MODE})
-    for w in state.get('wl', []):
-        r = by.get(w['s'])
-        if not r: continue
-        for kind, lvl in (('above', w.get('above')), ('below', w.get('below'))):
-            if lvl and ((kind == 'above' and r['px'] >= lvl) or (kind == 'below' and r['px'] <= lvl)) and sent.get(f'{w["s"]}:{kind}') != today:
-                sent[f'{w["s"]}:{kind}'] = today
-                msgs.append({'title': f'{w["s"]} {kind} {lvl}', 'body': f'{r["n"]} last {r["px"]:.4g} {r["cur"]} ({(r["r1"] or 0) * 100:+.1f}% today)', 'url': f'#stock/{w["s"]}', 'tag': f'{w["s"]}:{kind}'})
-        if abs(r.get('r1') or 0) >= .05 and sent.get(f'{w["s"]}:move') != today:
-            sent[f'{w["s"]}:move'] = today
-            msgs.append({'title': f'{w["s"]} moved {r["r1"] * 100:+.1f}%', 'body': f'{r["n"]} · {r["bias"]}', 'url': f'#stock/{w["s"]}', 'tag': f'{w["s"]}:move'})
+    jobs = []
+    for p, st in profs:
+        pr, msgs = prefs(st), []
+        if MODE in pr['notify'] and pr['notify'][MODE] and summary['reports']:
+            r = summary['reports'][0]
+            msgs.append({'title': 'Weekly report is ready' if MODE == 'weekly' else 'Daily brief is ready', 'body': f'{NOW:%a %d %b} · tap to read', 'url': f'#reports/{r["id"]}', 'tag': MODE})
+        msgs += alerts(p, st, {s: {'p': r['px'], 'c': r['r1'], 'n': r['n'], 'cur': r.get('cur', '')} for s, r in by.items()}, sent, today)
+        jobs.append({'subs': st.get('subs', []), 'msgs': msgs[:8]})
     cache_put('alerts.json', {k: v for k, v in sent.items() if v >= (NOW - dt.timedelta(days=7)).date().isoformat()})
-    Path(os.environ.get('PUSH_OUT', 'push.json')).write_text(json.dumps({'subs': subs, 'msgs': msgs[:8]}))
+    write_push(jobs)
+
+
+def alerts(p, st, q, sent, today):
+    """Price alerts, big moves and paper orders that have triggered. Each fires at most once a day per profile."""
+    pr, msgs = prefs(st), []
+    def once(key):
+        k = f'{p["id"]}:{key}'
+        if sent.get(k) == today: return False
+        sent[k] = today
+        return True
+    for w in alive(st.get('wl')):
+        x = q.get(w['s'])
+        if not x or x.get('p') is None: continue
+        if pr['notify']['alerts']:
+            for kind, lvl in (('above', w.get('above')), ('below', w.get('below'))):
+                if lvl and ((kind == 'above' and x['p'] >= lvl) or (kind == 'below' and x['p'] <= lvl)) and once(f'{w["s"]}:{kind}'):
+                    msgs.append({'title': f'{w["s"]} {kind} {lvl}', 'body': f'{x.get("n") or w["s"]} last {x["p"]:.4g} ({(x.get("c") or 0) * 100:+.1f}% today)', 'url': f'#stock/{w["s"]}', 'tag': f'{w["s"]}:{kind}'})
+        if pr['notify']['moves'] and abs(x.get('c') or 0) >= pr['move'] and once(f'{w["s"]}:move'):
+            msgs.append({'title': f'{w["s"]} moved {x["c"] * 100:+.1f}%', 'body': f'{x.get("n") or w["s"]} · last {x["p"]:.4g}', 'url': f'#stock/{w["s"]}', 'tag': f'{w["s"]}:move'})
+    if pr['notify']['orders']:
+        for o in open_orders(st):
+            x = q.get(o['s'])
+            if not x or not o.get('px'): continue
+            hi, lo = x.get('h') or x['p'], x.get('l') or x['p']
+            hit = (o['side'] == 'buy' and (lo <= o['px'] if o['type'] == 'limit' else hi >= o['px'])) or \
+                  (o['side'] == 'sell' and (hi >= o['px'] if o['type'] == 'limit' else lo <= o['px']))
+            if hit and once(f'order:{o["id"]}'):
+                msgs.append({'title': f'Paper {o["type"]} {o["side"]} {o["s"]} @ {o["px"]} triggered', 'body': 'Open the app to fill it.', 'url': '#paper', 'tag': f'order:{o["id"]}'})
+    return msgs
+
+
+# ---------------------------------------------------------------- live mode: quotes + breaking news every ~10 minutes
+
+LIVE_OUT = Path(os.environ.get('LIVE_OUT', 'liveout'))
+BREAKING_Q = ['stock market', 'Wall Street stocks', 'Bursa Malaysia', 'Singapore stocks STI', 'Federal Reserve', 'oil prices', 'gold prices', 'Asian markets']
+
+
+def quotes(syms):
+    """Latest price, change vs previous close and today's high/low. Yahoo's 15-min delay applies to Bursa/SGX."""
+    out = {}
+    syms = list(dict.fromkeys(syms))
+    for i in range(0, len(syms), 200):
+        chunk = syms[i:i + 200]
+        try: d = yf.download(chunk, period='5d', interval='1d', auto_adjust=False, progress=False, threads=True, group_by='column')
+        except Exception as e: print('quotes', e); continue
+        if not isinstance(d.columns, pd.MultiIndex): d.columns = pd.MultiIndex.from_product([d.columns, chunk])
+        for s in chunk:
+            try:
+                f = pd.DataFrame({k: d[k][s] for k in ('Close', 'High', 'Low', 'Volume')}).dropna(subset=['Close'])
+            except KeyError: continue
+            if len(f) >= 2 and (f['Volume'].iloc[-1] or 0) == 0 and (f['Volume'].iloc[-2] or 0) > 0: f = f.iloc[:-1]  # pre-open stub
+            if len(f) < 2: continue
+            last, prev = f.iloc[-1], f.iloc[-2]
+            out[s] = {'p': float(last['Close']), 'c': float(last['Close'] / prev['Close'] - 1), 'h': float(last['High']), 'l': float(last['Low']),
+                      'd': f.index[-1].date().isoformat()}
+    return out
+
+
+def breaking():
+    items = []
+    for q in BREAKING_Q:
+        try: items += gnews(q, 6, when='2h') or gnews(q, 3, when='1d')
+        except Exception as e: print('breaking', q, e)
+    seen, out = set(), []
+    for x in sorted(items, key=lambda x: _ts(x.get('at')), reverse=True):
+        if sum(ord(c) > 0x24F for c in x['t']) > len(x['t']) * .3: continue  # English feed, but Google mixes in other scripts
+        k = x['t'].lower()[:70]
+        if k not in seen: seen.add(k); out.append(x)
+    return out[:40]
+
+
+def _ts(s):
+    try: return dt.datetime.strptime(s, '%a, %d %b %Y %H:%M:%S %Z').timestamp()
+    except (TypeError, ValueError): return 0
+
+
+def live_main(profs):
+    summary = get('summary.bin', {}) or {}
+    syms = [x['s'] for g in (summary.get('macro') or {}).values() for x in g]
+    syms += list(family_symbols(profs))
+    for k in ('ideas', 'movers'):
+        syms += [r['s'] for v in (summary.get(k) or {}).values() for r in v]
+    q = quotes(syms)
+    fxq = quotes([f'{c}=X' for c in (summary.get('fx') or {'SGD': 1, 'MYR': 1}) if c not in ('USD', 'GBp')])
+    fx = {s[:-2]: v['p'] for s, v in fxq.items()}
+    if fx: fx['USD'] = 1.0
+    if 'GBP' in fx: fx['GBp'] = fx['GBP'] * 100
+    news = breaking()
+    LIVE_OUT.mkdir(parents=True, exist_ok=True)
+    (LIVE_OUT / 'live.bin').write_bytes(seal({'at': NOW.isoformat(), 'q': q, 'fx': fx, 'news': news}))
+    try: sent = unseal((LIVE_OUT / 'alerts.bin').read_bytes())
+    except Exception: sent = {}
+    today, jobs = NOW.date().isoformat(), []
+    names = {r['s']: r['n'] for v in (summary.get('ideas') or {}).values() for r in v}
+    for p, st in profs:
+        msgs = alerts(p, st, {s: {**v, 'n': names.get(s)} for s, v in q.items()}, sent, today)
+        if prefs(st)['notify']['breaking']:
+            for n in news[:3]:
+                if _ts(n.get('at')) > NOW.timestamp() - 1800 and sent.get(f'{p["id"]}:news:{n["t"][:60]}') is None:
+                    sent[f'{p["id"]}:news:{n["t"][:60]}'] = today
+                    msgs.append({'title': 'Breaking', 'body': n['t'][:180], 'url': '#news', 'tag': 'breaking'})
+        jobs.append({'subs': st.get('subs', []), 'msgs': msgs[:6]})
+    (LIVE_OUT / 'alerts.bin').write_bytes(seal({k: v for k, v in sent.items() if v >= (NOW - dt.timedelta(days=3)).date().isoformat()}))
+    write_push(jobs)
+    print('live', len(q), 'quotes', len(news), 'headlines', len(profs), 'profiles')
 
 
 if __name__ == '__main__':

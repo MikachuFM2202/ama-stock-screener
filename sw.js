@@ -5,9 +5,9 @@ self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('push', e => {
   let d = {};
   try { d = e.data?.json() || {}; } catch { d = { body: e.data?.text() }; }
-  e.waitUntil(self.registration.showNotification(d.title || 'Halal Terminal', {
+  e.waitUntil(self.registration.showNotification(d.title || 'AMA Stock Screener', {
     body: d.body || '', tag: d.tag || undefined, renotify: !!d.tag, icon: 'icon-192.png', badge: 'icon-192.png',
-    data: { hash: /^#[\w/.^=%-]*$/.test(d.url || '') ? d.url : '#brief' },
+    data: { hash: /^#[\w/.^=%:-]*$/.test(d.url || '') ? d.url : '#brief' },
   }));
 });
 

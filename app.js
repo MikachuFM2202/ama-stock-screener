@@ -1,13 +1,15 @@
-// app.js: Halal Terminal. Unlocks the encrypted snapshot on the `market` branch and renders every view.
-// Data flow: GitHub Actions (scripts/build.py) -> market branch (AES-GCM, gzip'd JSON) -> this page.
-// Personal state (watchlist, push subscriptions) lives encrypted on the `data` branch; writes need a GitHub token,
-// which is itself stored encrypted on that branch (vault.bin) so every device unlocks it with the password alone.
+// app.js: AMA Stock Screener. Unlocks the encrypted snapshot on the `market` branch and renders every view.
+// Data flow: GitHub Actions (scripts/build.py) -> `market` branch (daily/weekly, AES-GCM gzip'd JSON) and `live`
+// branch (quotes + breaking news every ~10 min) -> this page. An optional Cloudflare Worker gives 1-minute quotes.
+// Family data (profiles, watchlists, notes, paper trading, push subscriptions) lives encrypted on the `data` branch;
+// writes need a GitHub token, stored encrypted there too (vault.bin), so every device unlocks it with the password.
 import { LEARN, PATTERNS, GLOSSARY, RESOURCES, candleSvg } from './learn.js';
+import * as PT from './paper.js';
 
 const qs = new URLSearchParams(location.search);
 const REPO = qs.get('repo') || (() => {
   const m = location.hostname.match(/^([\w-]+)\.github\.io$/), p = location.pathname.split('/')[1];
-  return m && p ? `${m[1]}/${p}` : 'MikachuFM2202/stocks-tracker';
+  return m && p ? `${m[1]}/${p}` : 'MikachuFM2202/ama-stock-screener';
 })();
 const RAW = qs.get('data') || `https://raw.githubusercontent.com/${REPO}/`;
 const VAPID = 'BJIdRX6WvAnQGUXn8UX-ZnLxmmNiqxw_J3zZd7H_K_KiIpYUwvT9LIdvtIilKX2a07QkkajLu1mJ1YbeNPmiMPQ';
@@ -61,23 +63,23 @@ async function universe() {
 }
 function macroRow(s) { for (const rows of Object.values(D.summary.macro)) { const r = rows.find(x => x.s === s); if (r) return r; } return null; }
 
-// Personal state on the data branch.
-let ST = store.get('st', { wl: [], subs: [], at: 0 });
-let TOKEN = null;
+// ---------------------------------------------------------------- GitHub (family data on the `data` branch)
+let TOKEN = null, CFG = {};  // CFG: family settings sealed in vault.bin (token, optional worker)
 async function gh(path, opt = {}) {
   const r = await fetch(`https://api.github.com/repos/${REPO}/${path}`, { ...opt, headers: {
     Authorization: `Bearer ${TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(opt.headers || {}) } });
   if (!r.ok) throw Object.assign(new Error(`GitHub ${r.status}`), { status: r.status });
   return r;
 }
-async function readData(name) {
+async function readBranch(branch, name) {
   if (TOKEN) {  // the API is fresh; raw.githubusercontent caches for ~5 minutes
-    try { return await unseal(await (await gh(`contents/${name}?ref=data&_=${Date.now()}`, { headers: { Accept: 'application/vnd.github.raw+json' } })).arrayBuffer()); }
+    try { return await unseal(await (await gh(`contents/${name}?ref=${branch}&_=${Date.now()}`, { headers: { Accept: 'application/vnd.github.raw+json' } })).arrayBuffer()); }
     catch (e) { if (e.status === 404) return null; }
   }
-  const r = await fetch(`${RAW}data/${name}?_=${Date.now()}`, { cache: 'no-store' });
+  const r = await fetch(`${RAW}${branch}/${name}?_=${Date.now()}`, { cache: 'no-store' });
   return r.ok ? unseal(await r.arrayBuffer()) : null;
 }
+const readData = name => readBranch('data', name);
 async function putData(name, bytes, message) {
   for (let i = 0; i < 4; i++) {
     let sha;
@@ -86,34 +88,196 @@ async function putData(name, bytes, message) {
     catch (e) { if (![409, 422].includes(e.status) || i === 3) throw e; await sleep(400 * (i + 1) + Math.random() * 300); }
   }
 }
-async function loadState() {
-  try { const v = await readData('vault.bin'); TOKEN = v?.token || null; } catch {}
-  try {
-    const remote = await readData('state.bin');
-    if (remote && (remote.at || 0) >= (ST.at || 0)) { ST = { wl: [], subs: [], ...remote }; store.set('st', ST); }
-  } catch {}
+async function loadVault() {
+  try { const v = await readData('vault.bin'); if (v) { CFG = v; TOKEN = v.token || null; store.set('cfg', CFG); } }
+  catch { CFG = store.get('cfg', {}); TOKEN = CFG.token || null; }
+}
+async function saveVault(next) {
+  const prev = TOKEN; TOKEN = next.token || TOKEN;
+  try { await putData('vault.bin', await seal(next), 'vault: family settings'); CFG = next; store.set('cfg', CFG); }
+  catch (e) { TOKEN = prev; throw e; }
+}
+
+// ---------------------------------------------------------------- profiles
+const COLORS = ['#ffa028', '#2bd96b', '#5fb4ff', '#c38cff', '#ff6b9d', '#3fd0d0', '#ffe14d', '#ff4d4d'];
+const DEF_PREFS = { home: 'mkt', mkt: 'US', risk: 1, acct: 20000, move: 5, ticker: true, shariahOnly: true,
+  notify: { daily: true, weekly: true, alerts: true, moves: true, orders: true, breaking: false } };
+const now = () => new Date().toISOString();
+const blank = () => ({ v: 2, at: 0, wl: [], notes: {}, journal: [], later: [], subs: [], prefs: structuredClone(DEF_PREFS), paper: PT.newAccount() });
+let FAMILY = store.get('family', { list: [], at: 0 });
+let ME = null, ST = blank();
+const people = () => FAMILY.list.filter(p => !p.del);
+const P = () => ({ ...DEF_PREFS, ...ST.prefs, notify: { ...DEF_PREFS.notify, ...(ST.prefs?.notify || {}) } });
+
+async function loadFamily() {
+  try { const f = await readData('profiles.bin'); if (f) FAMILY = { ...f, list: PT.mergeList(FAMILY.list, f.list) }; } catch {}
+  store.set('family', FAMILY);
+}
+async function saveFamily() {
+  FAMILY.at = Date.now(); store.set('family', FAMILY);
+  if (!TOKEN) return;
+  const remote = await readData('profiles.bin').catch(() => null);
+  FAMILY.list = PT.mergeList(remote?.list, FAMILY.list);
+  await putData('profiles.bin', await seal(FAMILY), 'profiles: update');
+}
+// Two devices editing the same profile: lists merge by id (newer `u` wins), plain settings come from the newer copy.
+function mergeState(a, b) {
+  if (!a) return b; if (!b) return a;
+  const [o, n] = (a.at || 0) > (b.at || 0) ? [b, a] : [a, b];
+  const notes = { ...o.notes };
+  for (const [k, v] of Object.entries(n.notes || {})) if (!notes[k] || (v.u || '') >= (notes[k].u || '')) notes[k] = v;
+  const op = o.paper || PT.newAccount(), np = n.paper || PT.newAccount();
+  return { ...blank(), ...o, ...n, notes, wl: PT.mergeList(o.wl, n.wl, 's'), later: PT.mergeList(o.later, n.later), journal: PT.mergeList(o.journal, n.journal),
+    subs: PT.mergeList(o.subs, n.subs, 'endpoint'), paper: { ...op, ...np, trades: PT.mergeList(op.trades, np.trades), orders: PT.mergeList(op.orders, np.orders), eq: PT.mergeList(op.eq, np.eq, 'd') } };
+}
+async function loadMe(id) {
+  ME = people().find(p => p.id === id) || null;
+  if (!ME) return;
+  store.set('me', id);
+  ST = mergeState(blank(), store.get(`st:${id}`, null));
+  try { const remote = await readData(`p/${id}.bin`); if (remote) ST = mergeState(ST, remote); } catch {}
+  ST.paper ||= PT.newAccount();
+  store.set(`st:${id}`, ST);
+  paintMe();
 }
 let saveT = null, syncMsg = '';
 function saveState() {
-  ST.at = Date.now(); store.set('st', ST);
+  ST.at = Date.now(); store.set(`st:${ME.id}`, ST);
   clearTimeout(saveT);
-  if (!TOKEN) { syncMsg = 'Saved on this device only (connect GitHub in Settings to sync).'; return; }
+  if (!TOKEN) { syncMsg = 'Saved on this device only. Connect GitHub in Settings → Family to sync.'; return; }
+  const id = ME.id;
   saveT = setTimeout(async () => {
     try {
-      const remote = await readData('state.bin').catch(() => null);
-      // Subscriptions from other devices must survive this write.
-      const subs = new Map([...(remote?.subs || []), ...ST.subs].map(s => [s.endpoint, s]));
-      ST.subs = [...subs.values()];
-      await putData('state.bin', await seal(ST), 'state: update');
-      syncMsg = `Synced ${new Date().toLocaleTimeString()}`;
-    } catch (e) { syncMsg = `Sync failed (${e.message}). Kept on this device.`; toast(syncMsg); }
-  }, 700);
+      const remote = await readData(`p/${id}.bin`).catch(() => null);
+      const merged = mergeState(remote, ST);
+      if (ME?.id === id) { ST = merged; store.set(`st:${id}`, ST); }
+      await putData(`p/${id}.bin`, await seal(merged), `profile ${id}: update`);
+      syncMsg = `Synced ${new Date().toLocaleTimeString('en-SG', { hour: '2-digit', minute: '2-digit' })}`;
+    } catch (e) { syncMsg = `Sync failed (${e.message}). Kept on this device; will retry on the next change.`; toast(syncMsg); }
+  }, 800);
 }
-const inWl = s => ST.wl.some(w => w.s === s);
+const wlItems = () => ST.wl.filter(w => !w.del);
+const inWl = s => wlItems().some(w => w.s === s);
 function toggleWl(s, n) {
-  if (inWl(s)) ST.wl = ST.wl.filter(w => w.s !== s);
-  else ST.wl.unshift({ s, n: n || D.bySym.get(s)?.n || s, add: new Date().toISOString().slice(0, 10) });
-  saveState(); toast(inWl(s) ? `Added ${s} to watchlist` : `Removed ${s}`);
+  const w = ST.wl.find(x => x.s === s);
+  if (w && !w.del) Object.assign(w, { del: true, u: now() });
+  else if (w) Object.assign(w, { del: false, u: now(), add: now().slice(0, 10) });
+  else ST.wl.unshift({ s, n: n || D.bySym.get(s)?.n || s, add: now().slice(0, 10), u: now() });
+  saveState(); toast(inWl(s) ? `Added ${s} to ${ME.name}'s watchlist` : `Removed ${s}`);
+}
+async function sha(text) { return b64(new Uint8Array(await crypto.subtle.digest('SHA-256', te.encode(text)))); }
+function paintMe() {
+  const b = $('#me'); if (!b || !ME) return;
+  b.textContent = ME.name.slice(0, 1).toUpperCase(); b.style.background = ME.color; b.title = `${ME.name} · switch profile`;
+}
+
+// Profile picker: shown after unlock when this device has no profile yet, or from the avatar button.
+function pickProfile(msg = '') {
+  const el = $('#who');
+  el.hidden = false;
+  const list = people();
+  el.innerHTML = `<div class="who-box"><div class="brand"><span class="logo">AMA</span> WHO'S USING THE SCREENER?</div>
+    ${msg ? `<p class="err">${esc(msg)}</p>` : ''}
+    <div class="people">${list.map(p => `<button class="person" data-id="${esc(p.id)}"><span class="avatar lg" style="background:${esc(p.color)}">${esc(p.name.slice(0, 1).toUpperCase())}</span>${esc(p.name)}${p.pin ? ' 🔒' : ''}</button>`).join('')}</div>
+    <form id="addP" class="panel pb" style="display:grid;gap:10px"><b class="amber">${list.length ? 'Add a family member' : 'Create the first profile'}</b>
+      <input class="f" id="pName" maxlength="20" placeholder="Name" required>
+      <div class="swatches">${COLORS.map((c, i) => `<input type="radio" name="pc" id="pc${i}" value="${c}" ${i === list.length % COLORS.length ? 'checked' : ''}><label for="pc${i}" style="background:${c}" title="${c}"></label>`).join('')}</div>
+      <input class="f" id="pPin" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" placeholder="Optional PIN (4–8 digits)" autocomplete="off">
+      <button class="btn">CREATE PROFILE</button>
+      <p class="note">Everyone in the family shares the family password; profiles keep watchlists, notes, paper trading and notifications separate. A PIN stops casual switching. It is a lock on the door, not separate encryption.${TOKEN ? '' : ' GitHub sync is not connected yet, so new profiles stay on this device until it is (Settings → Family).'}</p></form>
+    ${ME ? '<button class="btn ghost" id="pBack">BACK</button>' : ''}</div>`;
+  $$('.person', el).forEach(b => b.onclick = async () => {
+    const p = people().find(x => x.id === b.dataset.id);
+    if (p.pin && store.get('me') !== p.id) {
+      const pin = await askPin(p.name);
+      if (pin == null) return;
+      if (await sha(p.pin.salt + pin) !== p.pin.h) return pickProfile('Wrong PIN.');
+    }
+    el.hidden = true; await loadMe(p.id); route();
+  });
+  $('#pBack')?.addEventListener('click', () => { el.hidden = true; });
+  $('#addP').onsubmit = async e => {
+    e.preventDefault();
+    const name = $('#pName').value.trim(), pin = $('#pPin').value.trim();
+    if (!name) return;
+    if (pin && !/^\d{4,8}$/.test(pin)) return pickProfile('PIN must be 4–8 digits.');
+    const id = (name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 12) || 'p') + Math.random().toString(36).slice(2, 6);
+    const salt = PT.rid();
+    FAMILY.list.push({ id, name, color: $('input[name=pc]:checked').value, pin: pin ? { salt, h: await sha(salt + pin) } : null, at: now(), u: now() });
+    try { await saveFamily(); } catch (x) { toast(`Saved here only: ${x.message}`); }
+    el.hidden = true; await loadMe(id); saveState(); route();
+  };
+}
+function askPin(name) {
+  return new Promise(res => {
+    const d = document.createElement('div');
+    d.className = 'login'; d.style.zIndex = 60;
+    d.innerHTML = `<form class="login-box"><b class="amber">PIN for ${esc(name)}</b><input class="f" type="password" inputmode="numeric" maxlength="8" autocomplete="off" autofocus>
+      <div class="row"><button class="btn">OK</button><button type="button" class="btn ghost">CANCEL</button></div></form>`;
+    document.body.append(d);
+    const inp = $('input', d); inp.focus();
+    $('form', d).onsubmit = e => { e.preventDefault(); d.remove(); res(inp.value); };
+    $('button[type=button]', d).onclick = () => { d.remove(); res(null); };
+  });
+}
+
+// ---------------------------------------------------------------- live quotes + breaking news
+let LIVE = null, liveFrom = '';
+function liveSyms() {
+  const s = new Set(Object.values(D.summary.macro).flat().map(r => r.s));
+  wlItems().forEach(w => s.add(w.s));
+  Object.keys(PT.holdings(ST.paper).pos).forEach(x => s.add(x));
+  ST.paper.orders.filter(o => o.status === 'open').forEach(o => s.add(o.s));
+  const [v, a] = location.hash.slice(1).split('/');
+  if (v === 'stock' && a) s.add(decodeURIComponent(a));
+  ['SGD=X', 'MYR=X'].forEach(x => s.add(x));
+  return [...s];
+}
+async function loadLive() {
+  let data = null;
+  if (CFG.worker?.url) {  // optional Cloudflare Worker: quotes straight from Yahoo every minute
+    try {
+      const u = CFG.worker.url.replace(/\/$/, ''), k = encodeURIComponent(CFG.worker.key || '');
+      const syms = liveSyms().slice(0, 180), chunks = [];
+      for (let i = 0; i < syms.length; i += 45) chunks.push(syms.slice(i, i + 45));  // free Workers allow 50 subrequests per call
+      const [qs, n] = await Promise.all([Promise.all(chunks.map(c => fetch(`${u}/q?k=${k}&s=${encodeURIComponent(c.join(','))}`).then(r => r.json()))), fetch(`${u}/news?k=${k}`).then(r => r.json())]);
+      const q = { at: qs[0]?.at || new Date().toISOString(), q: Object.assign({}, ...qs.map(x => x.q || {})) };
+      const fx = {}; for (const [s, v] of Object.entries(q.q || {})) if (s.endsWith('=X')) fx[s.slice(0, -2)] = v.p;
+      data = { at: q.at, q: q.q, fx, news: n.news || [] }; liveFrom = 'worker';
+    } catch (e) { console.warn('worker', e); }
+  }
+  if (!data) { try { data = await readBranch('live', 'live.bin'); liveFrom = 'github'; } catch {} }
+  if (!data) return false;
+  const changed = !LIVE || data.at !== LIVE.at;
+  LIVE = data; applyLive(); paintTicker(); tick();
+  return changed;
+}
+function applyLive() {
+  if (!LIVE) return;
+  D.fx = { ...(D.summary.fx || {}), ...(LIVE.fx || {}), USD: 1 };
+  if (D.fx.GBP) D.fx.GBp = D.fx.GBP * 100;
+  for (const [s, q] of Object.entries(LIVE.q || {})) {
+    const r = D.bySym.get(s) || macroRow(s);
+    if (r && q.p && (!r.d || !q.d || q.d >= r.d)) Object.assign(r, { px: q.p, r1: q.c, d: q.d || r.d, live: true });
+  }
+}
+function quoteOf(s) {
+  const r = D.bySym.get(s) || macroRow(s), q = LIVE?.q?.[s];
+  const px = q?.p ?? r?.px;
+  return px ? { px, h: q?.h, l: q?.l, d: q?.d || r?.d, cur: r?.cur || curOf(s), st: r?.st, n: r?.n || s } : null;
+}
+const curOf = s => ({ KL: 'MYR', SI: 'SGD', T: 'JPY', HK: 'HKD', L: 'GBp', TO: 'CAD', AX: 'AUD', KS: 'KRW', TW: 'TWD', SS: 'CNY', SZ: 'CNY', JK: 'IDR', SW: 'CHF', AS: 'EUR' })[s.split('.')[1]] || 'USD';
+function paintTicker() {
+  const el = $('#ticker'), tr = $('#tickerTrack');
+  el.hidden = !P().ticker;
+  if (el.hidden) return;
+  const marks = ['^GSPC', '^IXIC', '^KLSE', '^STI', 'GC=F', 'CL=F', 'SGD=X'].map(macroRow).filter(Boolean)
+    .map(r => `<span class="q">${esc(r.n)} <span class="mono">${px(r.px)}</span> ${pct(r.r1)}</span>`);
+  const news = (LIVE?.news?.length ? LIVE.news : D.summary.news || []).slice(0, 25)
+    .map(n => `<a href="${esc(safe(n.u))}" target="_blank" rel="noopener"><b>${esc(n.s || 'NEWS')}</b>${esc(n.t)}${n.at ? ` <span class="dim">${esc(ago(n.at))}</span>` : ''}</a>`);
+  const items = [...marks, ...news].join('');
+  tr.innerHTML = items + items;  // doubled so the -50% scroll loops seamlessly
+  tr.style.setProperty('--dur', `${Math.max(60, (marks.length + news.length) * 7)}s`);
 }
 
 // ---------------------------------------------------------------- formatting
@@ -125,7 +289,12 @@ function px(v) {
   return v.toLocaleString('en-US', { minimumFractionDigits: a >= 1000 ? 2 : a >= 1 ? 2 : 3, maximumFractionDigits: a >= 1000 ? 2 : a >= 1 ? 3 : 4 });
 }
 const cls = v => v > 0 ? 'up' : v < 0 ? 'down' : 'flat';
-const pct = (v, d = 2) => v == null || !isFinite(v) ? '<span class="flat">–</span>' : `<span class="${cls(v)}">${v > 0 ? '+' : ''}${(v * 100).toFixed(d)}%</span>`;
+const pct = (v, d = 2) => {
+  if (v == null || !isFinite(v)) return '<span class="flat">–</span>';
+  if (Math.abs(v * 100) < 0.5 * 10 ** -d) v = 0;  // no red "-0.00%"
+  return `<span class="${cls(v)}">${v > 0 ? '+' : ''}${(v * 100).toFixed(d)}%</span>`;
+};
+const money = v => v == null || !isFinite(v) ? '–' : (Math.abs(v) < 0.005 ? 0 : v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pctp = v => v == null || !isFinite(v) ? '–' : `${(v * 100).toFixed(0)}%`;
 function big(v) {
   if (v == null || !isFinite(v)) return '–';
@@ -203,34 +372,83 @@ function mooCode(s) {
 }
 
 // ---------------------------------------------------------------- shell
-const TABS = [['mkt', 'MKT', 'Market'], ['brief', 'BRF', 'Reports'], ['ideas', 'IDEA', 'Shariah ideas'], ['screen', 'SCRN', 'Screener'],
-  ['wl', 'WL', 'Watchlist'], ['news', 'NEWS', 'News & calendar'], ['media', 'TV', 'Watch & listen'], ['learn', 'EDU', 'Learn'],
-  ['glossary', 'GLOS', 'Terms'], ['settings', 'SET', 'Settings']];
-let cleanup = [];
+// ---------------------------------------------------------------- shell
+const TABS = [['mkt', 'MKT', 'Market'], ['brief', 'BRF', 'Reports'], ['ideas', 'IDEA', 'Ideas'], ['screen', 'SCRN', 'Screener'],
+  ['wl', 'WL', 'Watchlist'], ['paper', 'PAPR', 'Paper'], ['notes', 'NOTE', 'Notes'], ['news', 'NEWS', 'News'],
+  ['media', 'TV', 'Watch'], ['learn', 'EDU', 'Learn'], ['glossary', 'GLOS', 'Terms'], ['settings', 'SET', 'Settings']];
+const BNAV = ['mkt', 'ideas', 'wl', 'paper'];
+let cleanup = [], lastDispatch = 0, fastPoll = 0;
 function shell() {
   $('#tabs').innerHTML = TABS.map(([id, k, n]) => `<a href="#${id}" data-tab="${id}"><b>${k}</b>${n}</a>`).join('');
-  const h = () => document.documentElement.style.setProperty('--top-h', $('.top').offsetHeight + 'px');
+  $('#bnav').innerHTML = BNAV.map(id => { const t = TABS.find(x => x[0] === id); return `<a href="#${id}" data-tab="${id}"><b>${t[1]}</b>${t[2].split(' ')[0]}</a>`; }).join('')
+    + '<a href="#" id="more" data-tab="more"><b>•••</b>More</a>';
+  $('#sheet').innerHTML = TABS.filter(t => !BNAV.includes(t[0])).map(([id, k, n]) => `<a href="#${id}"><b>${k}</b>${n}</a>`).join('');
+  $('#more').onclick = e => { e.preventDefault(); $('#sheet').hidden = !$('#sheet').hidden; };
+  $('#sheet').onclick = () => { $('#sheet').hidden = true; };
+  const h = () => {
+    document.documentElement.style.setProperty('--top-h', $('.top').offsetHeight + 'px');
+    document.documentElement.style.setProperty('--tabs-h', $('#tabs').offsetHeight + 'px');
+  };
   h(); addEventListener('resize', h);
   setInterval(tick, 15000); tick();
+  // Live data every minute (Worker) or as soon as the 10-minute GitHub job publishes; snapshot every 5 minutes.
+  setInterval(() => { if (document.visibilityState === 'visible') pollLive(); }, 60000);
+  setInterval(() => { if (document.visibilityState === 'visible' && fastPoll > Date.now()) pollLive(); }, 20000);
+  setInterval(() => { if (document.visibilityState === 'visible') refreshMeta(); }, 300000);
   $('#cmd').addEventListener('submit', e => { e.preventDefault(); go($('#cmdIn').value); });
+  $('#refresh').onclick = refreshNow;
+  $('#me').onclick = () => pickProfile();
   document.addEventListener('click', e => {
     const b = e.target.closest('[data-star]');
     if (b) { e.preventDefault(); toggleWl(b.dataset.star, b.dataset.n); $$(`[data-star="${CSS.escape(b.dataset.star)}"]`).forEach(x => x.classList.toggle('on', inWl(b.dataset.star))); return; }
     const tr = e.target.closest('tr[data-go]');
-    if (tr && !e.target.closest('a,button,input,select')) location.hash = tr.dataset.go;
+    if (tr && !e.target.closest('a,button,input,select,textarea')) location.hash = tr.dataset.go;
   });
-  addEventListener('hashchange', route);
-  document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible') { await refreshMeta(); } });
+  addEventListener('hashchange', () => route());
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { refreshMeta(); pollLive(); } });
 }
 function tick() {
-  const now = new Date();
-  $('#clock').innerHTML = `<b>SGT</b> ${now.toLocaleTimeString('en-SG', { timeZone: 'Asia/Singapore', hour: '2-digit', minute: '2-digit', hour12: false })} · data ${D.summary ? ago(D.summary.at) : '–'}`;
+  const n = new Date(), t = d => new Date(d).toLocaleTimeString('en-SG', { timeZone: 'Asia/Singapore', hour: '2-digit', minute: '2-digit', hour12: false });
+  $('#clock').innerHTML = `<b>SGT</b> ${t(n)} · ${LIVE ? `live ${t(LIVE.at)}` : `data ${D.summary ? ago(D.summary.at) : '–'}`}`;
   const el = $('#sessions'); if (el) el.innerHTML = sessionsHtml();
 }
-async function refreshMeta() {
+const typing = () => document.activeElement?.matches?.('input,textarea,select');
+let lastTouch = 0;
+['pointerdown', 'keydown', 'wheel', 'touchmove'].forEach(t => addEventListener(t, () => { lastTouch = Date.now(); }, { passive: true, capture: true }));
+// Background data re-renders only the price-heavy views, and never while someone is tapping or typing:
+// swapping the DOM mid-tap eats the tap.
+function softRoute() {
+  const v = location.hash.slice(1).split('/')[0] || P().home;
+  if (!['mkt', 'wl', 'paper', 'ideas', 'screen'].includes(v)) return;
+  if (typing() || Date.now() - lastTouch < 2500) { clearTimeout(softRoute.t); softRoute.t = setTimeout(softRoute, 2500); return; }
+  route(true);
+}
+async function pollLive() {
+  if (await loadLive().catch(() => false)) { processOrders(); softRoute(); }
+}
+// The ⟳ button: re-read everything now; with a GitHub token also ask the server for fresh quotes (~1–2 min).
+async function refreshNow() {
+  const b = $('#refresh'); b.classList.add('spin'); b.disabled = true;
+  try {
+    await refreshMeta(true);
+    const changed = await loadLive();
+    if (TOKEN && !CFG.worker?.url && Date.now() - lastDispatch > 120000) {
+      await gh('dispatches', { method: 'POST', body: JSON.stringify({ event_type: 'refresh' }) });
+      lastDispatch = Date.now(); fastPoll = Date.now() + 5 * 60000;
+      toast('Fetching fresh prices on the server: about 1–2 minutes. The page updates by itself.');
+    } else toast(changed ? 'Updated' : CFG.worker?.url ? 'Live prices are current' : TOKEN ? 'Already refreshing' : 'Up to date. Connect GitHub in Settings for server refresh.');
+    processOrders(); route(true);
+  } catch (e) { toast(`Refresh failed: ${e.message}`); }
+  finally { b.classList.remove('spin'); b.disabled = false; }
+}
+async function refreshMeta(force = false) {
   try {
     const m = await (await fetch(`${RAW}market/meta.json?_=${Date.now()}`, { cache: 'no-store' })).json();
-    if (m.at !== META.at) { META = m; store.set('meta', m); files.clear(); D.uni = null; D.bySym.clear(); D.summary = await mk('summary.bin'); toast('New market data loaded'); route(); }
+    if (m.at !== META.at || force) {
+      const fresh = m.at !== META.at;
+      META = m; store.set('meta', m);
+      if (fresh) { files.clear(); D.uni = null; D.bySym.clear(); D.summary = await mk('summary.bin'); await universe(); applyLive(); toast('New market snapshot loaded'); if (!force) softRoute(); }
+    }
   } catch {}
 }
 function fillCmd() {
@@ -250,17 +468,20 @@ async function go(q) {
   location.hash = `stock/${encodeURIComponent(hit ? hit.s : U)}`;
   $('#cmdIn').value = ''; $('#cmdIn').blur();
 }
-async function route() {
+async function route(keep = false) {
+  if (!ME) return;
   cleanup.forEach(f => { try { f(); } catch {} }); cleanup = [];
   const [v, ...rest] = location.hash.slice(1).split('/');
-  const view = VIEWS[v] ? v : 'mkt';
-  $$('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === (view === 'stock' ? '' : view === 'reports' ? 'brief' : view)));
-  const main = $('#main');
-  main.innerHTML = '<p class="muted mono">LOADING…</p>';
+  const view = VIEWS[v] ? v : P().home in VIEWS ? P().home : 'mkt';
+  const tab = view === 'stock' ? '' : view === 'reports' ? 'brief' : view;
+  $$('#tabs a, #bnav a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab || (a.dataset.tab === 'more' && !BNAV.includes(tab) && tab !== '')));
+  $('#sheet').hidden = true;
+  const main = $('#main'), y = scrollY;
+  if (!keep) main.innerHTML = '<p class="muted">Loading…</p>';
   try { await VIEWS[view](decodeURIComponent(rest.join('/')), main); }
-  catch (e) { console.error(e); main.innerHTML = `<div class="warn">Couldn't load this view: ${esc(e.message)}. Check your connection and try again.</div>`; }
-  if (!location.hash.includes('/')) scrollTo(0, 0);
-  $('#foot').innerHTML = `Snapshot ${esc(sgt(D.summary.at))} SGT (${esc(D.summary.mode)} run) · prices delayed / end-of-day · statistical outlooks, not certainties · educational, not financial advice`;
+  catch (e) { console.error(e); main.innerHTML = `<div class="warn">Couldn't load this view: ${esc(e.message)}. Check your connection and tap ⟳.</div>`; }
+  if (keep) scrollTo(0, y); else if (!location.hash.includes('/')) scrollTo(0, 0);
+  $('#foot').innerHTML = `${esc(ME.name)} · snapshot ${esc(sgt(D.summary.at))} SGT (${esc(D.summary.mode)})${LIVE ? ` · live prices ${esc(sgt(LIVE.at, { hour: '2-digit', minute: '2-digit' }))} via ${liveFrom === 'worker' ? 'Cloudflare Worker' : 'GitHub (every ~10 min)'}` : ''} · Bursa/SGX quotes delayed ~15 min · statistical outlooks, not certainties · educational, not financial advice`;
 }
 
 // ---------------------------------------------------------------- market sessions (SGT)
@@ -350,8 +571,8 @@ VIEWS.brief = async (id, main) => {
 };
 
 VIEWS.ideas = async (mkt, main) => {
-  mkt = MKT[mkt] ? mkt : store.get('im', 'US');
-  store.set('im', mkt);
+  mkt = MKT[mkt] ? mkt : store.get(`im:${ME.id}`, P().mkt);
+  store.set(`im:${ME.id}`, mkt);
   const I = D.summary.ideas;
   const inv = I[`${mkt}-invest`] || [], day = I[`${mkt}-day`] || [];
   const t = (rows, kind) => `<div class="tw"><table><thead><tr><th>Ticker</th><th class="l">Name</th><th class="l">Status</th><th>Score</th><th>Last</th><th>1D</th><th>1M</th><th>3M</th><th>RSI</th>
@@ -405,97 +626,6 @@ VIEWS.screen = async (arg, main) => {
   draw();
 };
 
-VIEWS.wl = async (_, main) => {
-  const U = await universe();
-  const moo = await readData('moomoo.bin').catch(() => null);
-  const rows = ST.wl.map(w => ({ w, r: D.bySym.get(w.s) || macroRow(w.s) }));
-  main.innerHTML = `<div class="grid wide">${panel('Watchlist', `
-    <form class="row pb" id="wlAdd"><input class="f sp" id="wlIn" list="cmdList" placeholder="Add ticker: AAPL, 5347.KL, D05.SI, 7203.T" autocapitalize="characters"><button class="btn">ADD</button></form>
-    <div class="tw"><table><thead><tr><th>Ticker</th><th class="l">Name</th><th class="l">Status</th><th>Last</th><th>1D</th><th>1W</th><th>1M</th><th>RSI</th><th class="l">Bias</th><th>↑1W</th><th>↑1M</th>
-      <th title="Push alert when price goes above">Alert ≥</th><th title="Push alert when price goes below">Alert ≤</th><th class="l">Notes</th><th></th></tr></thead><tbody>
-    ${rows.map(({ w, r }) => `<tr data-s="${esc(w.s)}"><td class="l"><a class="sym" href="#stock/${encodeURIComponent(w.s)}">${esc(w.s)}</a></td><td class="nm l">${esc(r?.n || w.n)}</td>
-      <td class="l">${r ? badge(r.st) : '<span class="note">next update</span>'}</td><td>${px(r?.px)}</td><td>${pct(r?.r1)}</td><td>${pct(r?.r5)}</td><td>${pct(r?.r21)}</td><td>${r?.rsi?.toFixed(0) ?? '–'}</td>
-      <td class="l">${biasHtml(r?.bias)}</td><td>${fcCell(r?.fc, 5)}</td><td>${fcCell(r?.fc, 21)}</td>
-      <td><input class="f" style="width:84px" inputmode="decimal" data-f="above" value="${w.above ?? ''}"></td><td><input class="f" style="width:84px" inputmode="decimal" data-f="below" value="${w.below ?? ''}"></td>
-      <td class="l"><input class="f" style="width:220px" data-f="note" value="${esc(w.note || '')}" placeholder="Why am I watching this?"></td>
-      <td><button class="btn sm ghost" data-rm>✕</button></td></tr>`).join('') || '<tr><td colspan="15" class="l muted">Empty. Add tickers above, or tap ★ anywhere.</td></tr>'}
-    </tbody></table></div>
-    <p class="pb note">${esc(syncMsg || (TOKEN ? 'Synced across your devices.' : 'Saved on this device. Connect GitHub in Settings to sync and get alerts.'))} Alerts and big-move (±5%) notifications are checked at each data update (≈06:30 and 18:15 SGT on weekdays), not live.</p>`, '', 'span')}
-    ${moo ? panel(`moomoo · snapshot ${esc(sgt(moo.at))} SGT`, mooHtml(moo), '', 'span') : ''}
-    ${panel('Upcoming earnings (watchlist + big certified names)', `<ul class="list">${(D.summary.earnings || []).map(e => `<li><a href="#stock/${encodeURIComponent(e.s)}">${esc(e.s)}</a> ${esc(e.n)} <small>${esc(sgt(e.at))} SGT</small></li>`).join('') || '<li class="muted">None in the next 3 weeks.</li>'}</ul>`)}
-    </div>`;
-  $('#wlAdd').onsubmit = e => {
-    e.preventDefault();
-    const raw = $('#wlIn').value.trim().toUpperCase(); if (!raw) return;
-    const s = U.find(r => r.s === raw)?.s || U.find(r => r.s.split('.')[0] === raw)?.s || raw;
-    if (!inWl(s)) toggleWl(s, U.find(r => r.s === s)?.n);
-    route();
-  };
-  $$('tr[data-s]', main).forEach(tr => {
-    const w = ST.wl.find(x => x.s === tr.dataset.s);
-    $$('input[data-f]', tr).forEach(inp => inp.onchange = () => {
-      const f = inp.dataset.f, v = inp.value.trim();
-      w[f] = f === 'note' ? v : v === '' ? null : +v;
-      if (f !== 'note' && v !== '' && !isFinite(+v)) { toast('Enter a number'); return; }
-      saveState(); toast('Saved');
-    });
-    $('[data-rm]', tr).onclick = () => { toggleWl(w.s); route(); };
-  });
-  $$('[data-import]', main).forEach(b => b.onclick = () => { JSON.parse(b.dataset.import).forEach(s => { if (!inWl(s)) ST.wl.push({ s, n: s, add: new Date().toISOString().slice(0, 10) }); }); saveState(); route(); });
-};
-function mooHtml(m) {
-  const q = (m.quotes || []).map(x => `<tr><td class="l"><a class="sym" href="#stock/${encodeURIComponent(x.s)}">${esc(x.s)}</a></td><td class="nm l">${esc(x.n)}</td><td>${px(x.px)}</td><td>${pct(x.chg)}</td><td>${big(x.vol)}</td><td>${big(x.turnover)}</td></tr>`).join('');
-  const groups = Object.entries(m.groups || {}).map(([g, list]) => `<p><b>${esc(g)}</b> ${list.map(s => `<a href="#stock/${encodeURIComponent(s)}">${esc(s)}</a>`).join(', ')} <button class="btn sm ghost" data-import='${esc(JSON.stringify(list))}'>Add all to watchlist</button></p>`).join('');
-  const pos = (m.positions || []).map(p => `<tr><td class="l">${esc(p.s)}</td><td>${p.qty}</td><td>${px(p.cost)}</td><td>${px(p.px)}</td><td>${pct(p.pl)}</td></tr>`).join('');
-  return `<div class="tw"><table><thead><tr><th>Ticker</th><th class="l">Name</th><th>Last</th><th>Chg</th><th>Volume</th><th>Turnover</th></tr></thead><tbody>${q}</tbody></table></div>
-    <div class="pb">${groups}${pos ? `<h3 class="amber mono">Positions</h3><div class="tw"><table><thead><tr><th>Ticker</th><th>Qty</th><th>Cost</th><th>Last</th><th>P/L</th></tr></thead><tbody>${pos}</tbody></table></div>` : ''}</div>`;
-}
-
-VIEWS.stock = async (s, main) => {
-  await universe();
-  let r = D.bySym.get(s) || macroRow(s);
-  if (!r) {
-    main.innerHTML = `<div class="warn">${esc(s)} isn't in the tracked universe yet. Add it to your watchlist and the next data update (06:30 / 18:15 SGT) will fetch it, screen it and add a chart.</div>
-      <p>${star(s, s)} Add ${esc(s)} to watchlist · <a href="https://finance.yahoo.com/quote/${encodeURIComponent(s)}" target="_blank" rel="noopener">Yahoo Finance</a> · <a href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSym(s))}" target="_blank" rel="noopener">TradingView</a></p>`;
-    return;
-  }
-  const isEq = !!r.m;
-  const about = isEq ? (await mk('about.bin').catch(() => ({})))[s] || {} : {};
-  const fc = h => r.fc?.[h] || r.fc?.[String(h)];
-  const news = (D.summary.news || []).filter(n => n.sym === s);
-  main.innerHTML = `
-    <div class="qhead">${star(s, r.n)}<h1 style="margin:0">${esc(s)}</h1><span class="nm">${esc(r.n)}${isEq ? ` · ${MKT[r.m]} · ${esc(r.sec || '')}` : ''}</span>${badge(r.st)}
-      <span class="px mono">${px(r.px)}</span><span class="mono">${pct(r.r1)} today</span><span class="note">${esc(r.cur || '')} · close ${esc(r.d || '')}</span></div>
-    <div class="grid wide">
-      <section class="panel span"><div class="ph"><h2>Chart</h2><div class="chips" id="rng">${['3M', '6M', '1Y', '2Y'].map(k => `<button class="chip ${k === '6M' ? 'on' : ''}" data-r="${k}">${k}</button>`).join('')}
-        <button class="chip" id="tvBtn" title="Live intraday chart from TradingView">LIVE (TradingView)</button></div></div>
-        <div class="chart" id="ch"><div class="legend" id="lg"></div></div><div class="tv" id="tv" hidden></div>
-        <div class="pb note">Candles daily · <span style="color:#ffe14d">SMA20</span> · <span style="color:#5fb4ff">SMA50</span> · <span style="color:#c38cff">SMA200</span> · volume · RSI(14) at the bottom · dashed amber = statistical 68% range for ~1W/1M/3M ahead.</div></section>
-      ${panel('Outlook (statistical)', `<div class="tw"><table><thead><tr><th>Horizon</th><th>P(higher)</th><th>Likely range (68%)</th><th>Median path</th></tr></thead><tbody>
-        ${[[5, '~1 week'], [21, '~1 month'], [63, '~3 months']].map(([h, n]) => fc(h) ? `<tr><td class="l">${n}</td><td>${fcCell(r.fc, h)}</td><td>${px(fc(h).lo)} – ${px(fc(h).hi)}</td><td>${px(fc(h).mid)}</td></tr>` : '').join('')}</tbody></table></div>
-        <div class="pb"><p>Trend bias: ${biasHtml(r.bias)} (score ${r.score?.toFixed(0) ?? '–'} of ±100). ${techRead(r)}</p><p class="note">Based on how ${isEq ? MKT[r.m] : 'macro'} instruments with a similar trend score behaved over the past 2 years, scaled to this one's volatility. Markets can and do break these ranges; use a stop.</p></div>`)}
-      ${panel('Key stats', `<div class="kv">${kv([['Last', px(r.px)], ['1 week', pct(r.r5)], ['1 month', pct(r.r21)], ['3 months', pct(r.r63)], ['1 year', pct(r.r252)], ['YTD', pct(r.ytd)],
-        ['52w high', px(r.hi52)], ['52w low', px(r.lo52)], ['SMA 20', px(r.sma20)], ['SMA 50', px(r.sma50)], ['SMA 200', px(r.sma200)], ['RSI 14', r.rsi?.toFixed(1) ?? '–'],
-        ['ATR % (daily range)', r.atr ? (r.atr * 100).toFixed(2) + '%' : '–'], ['Rel. volume', r.rv ? r.rv.toFixed(2) + '×' : '–'], ['Avg traded/day (US$)', big(r.valusd)],
-        ...(isEq ? [['Market cap', big(r.mc)], ['P/E', r.pe?.toFixed(1) ?? '–'], ['Fwd P/E', r.fpe?.toFixed(1) ?? '–'], ['P/B', r.pb?.toFixed(2) ?? '–'], ['ROE', pct(r.roe, 1)],
-          ['Profit margin', pct(r.pm, 1)], ['Revenue growth', pct(r.rg, 1)], ['Dividend yield', r.dy == null ? '–' : r.dy.toFixed(2) + '%'], ['Beta', r.beta?.toFixed(2) ?? '–'],
-          ['Analyst target', px(r.tgt)], ['Analyst view', `${esc(r.rec || '–')} (${r.ana ?? 0})`], ['Next earnings', r.earn ? sgt(new Date(r.earn * 1000).toISOString(), { day: 'numeric', month: 'short', year: 'numeric' }) : '–']] : [])])}</div>`)}
-      ${isEq ? panel('Shariah compliance', `<div class="pb"><p>${badge(r.st)} <b>${esc(STATUS[r.st])}</b></p><ul>${(about.why || r.why || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
-        <p class="note">Debt/market cap ${pctp(r.dm)} · cash/market cap ${pctp(r.cm)}. Dividends: purify the non-halal income share (see Learn → Shariah investing). Status can change at each review; Malaysian names are re-reviewed every May and November.</p></div>`) : ''}
-      ${about.about ? panel('What the company does', `<div class="pb">${esc(about.about)}${about.about.length >= 690 ? '…' : ''}</div>`) : ''}
-      ${panel('Research links', `<div class="pb">${links(r)}</div>`)}
-      ${panel('Latest news', `<ul class="list">${news.map(n => `<li><a href="${esc(safe(n.u))}" target="_blank" rel="noopener">${esc(n.t)}</a><br><small>${esc(n.s || '')} · ${esc(n.at ? ago(n.at) : '')}</small></li>`).join('')
-        || `<li>Not on your watchlist, so no saved headlines. <a href="https://news.google.com/search?q=${encodeURIComponent(`"${r.n}"`)}&hl=en-SG&gl=SG&ceid=SG:en" target="_blank" rel="noopener">Search Google News</a></li>`}</ul>`)}
-    </div>`;
-  const bars = await mk(`ohlc/${s.replace(/[^A-Za-z0-9.-]/g, '_')}.bin`).catch(() => null);
-  if (!bars || !window.LightweightCharts) { $('#ch').innerHTML = '<p class="pb muted">Chart data unavailable.</p>'; return; }
-  drawChart(bars, r);
-  $('#tvBtn').onclick = () => {
-    const tv = $('#tv'), on = tv.hidden;
-    tv.hidden = !on; $('#ch').hidden = on; $('#tvBtn').classList.toggle('on', on);
-    if (on && !tv.firstChild) tv.innerHTML = `<iframe title="TradingView chart" style="width:100%;height:100%;border:0" src="https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSym(s))}&interval=D&theme=dark&style=1&timezone=Asia%2FSingapore&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=1&studies=%5B%5D&locale=en"></iframe>`;
-  };
-};
 const kv = pairs => pairs.map(([k, v]) => `<div><small>${esc(k)}</small><span>${v}</span></div>`).join('');
 function techRead(r) {
   const t = [];
@@ -584,19 +714,6 @@ VIEWS.news = async (_, main) => {
   $$('[data-g]', main).forEach(b => b.onclick = () => { store.set('ng', b.dataset.g); route(); });
 };
 
-VIEWS.media = async (_, main) => {
-  const M = D.summary.media || { vids: [], pods: [] };
-  const vids = [...M.vids].sort((a, b) => new Date(b.at) - new Date(a.at));
-  main.innerHTML = `<div class="grid wide">
-    ${panel('Start here · the video you shared', `<div class="embed"><iframe src="https://www.youtube-nocookie.com/embed/${FEATURED}" title="StockedUp: The Stock Market Is Being Manipulated…" allow="encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe></div>
-      <p class="pb note">StockedUp · "The Stock Market Is Being Manipulated…". Watch critically: ask what evidence is shown, and what would prove it wrong.</p>`)}
-    ${panel('Study plan · what to watch next', `<div class="pb">${RESOURCES.study.map(([t, q, why]) => `<p><a href="https://www.youtube.com/results?search_query=${encodeURIComponent(q)}" target="_blank" rel="noopener">▶ ${esc(t)}</a><br><span class="note">${esc(why)}</span></p>`).join('')}</div>`)}
-    ${panel('Latest from market channels', `<div class="pb vids">${vids.slice(0, 36).map(v => `<a class="vid" href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener"><img loading="lazy" alt="" src="https://i.ytimg.com/vi/${esc(v.id)}/mqdefault.jpg"><div>${esc(v.t)}<small>${esc(v.src)} · ${v.at ? esc(ago(v.at)) : ''}</small></div></a>`).join('') || '<p class="muted">Video feeds were unavailable at the last update.</p>'}</div>`, '', 'span')}
-    ${panel('Latest podcast episodes', `<ul class="list">${M.pods.map(p => `<li><b class="amber">${esc(p.src)}</b><br><a href="${esc(safe(p.u))}" target="_blank" rel="noopener">${esc(p.t)}</a> <small>${p.at ? esc(ago(p.at)) : ''}</small></li>`).join('')}</ul>`)}
-    ${panel('Channels & shows to follow', `<div class="pb">${RESOURCES.channels.map(([t, u, d]) => `<p><a href="${esc(safe(u))}" target="_blank" rel="noopener">${esc(t)}</a> <span class="note">${esc(d)}</span></p>`).join('')}</div>`)}
-  </div>`;
-};
-
 VIEWS.learn = async (id, main) => {
   const cur = LEARN.find(x => x.id === id) || LEARN[0];
   main.innerHTML = `<div class="side"><nav class="toc">${LEARN.map(x => `<a href="#learn/${x.id}" class="${x.id === cur.id ? 'on' : ''}">${esc(x.t)}</a>`).join('')}</nav>
@@ -623,50 +740,381 @@ VIEWS.glossary = async (_, main) => {
   draw();
 };
 
-VIEWS.settings = async (_, main) => {
-  const sub = await currentSub();
-  const tokenUrl = `https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent('Halal Terminal sync')}&description=${encodeURIComponent('Lets the stocks-tracker site save the watchlist and push subscriptions')}&target_name=${encodeURIComponent(REPO.split('/')[0])}&contents=write&actions=write`;
-  const ios = /iPhone|iPad/.test(navigator.userAgent), standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-  main.innerHTML = `<div class="grid">
-    ${panel('Sync across devices', `<div class="pb">${TOKEN ? `<p class="up">Connected. Watchlist and alerts sync to the encrypted <code>data</code> branch of ${esc(REPO)}.</p>
-      <div class="row"><button class="btn ghost" id="refresh">REFRESH DATA NOW</button><button class="btn ghost" id="forget">DISCONNECT THIS TOKEN</button></div><p class="note" id="rmsg"></p>`
-      : `<p>One-time setup per account (not per device): create a fine-grained GitHub token for <b>${esc(REPO)}</b> only, with <b>Contents: Read and write</b> and <b>Actions: Read and write</b>. It's stored encrypted with your password, so other devices pick it up automatically.</p>
-      <p><a class="btn ghost" href="${esc(tokenUrl)}" target="_blank" rel="noopener">CREATE TOKEN ON GITHUB ↗</a></p>
-      <form class="row" id="tokF"><input class="f sp" id="tok" type="password" placeholder="github_pat_…" autocomplete="off"><button class="btn">SAVE</button></form><p class="err" id="tokMsg"></p>`}</div>`)}
-    ${panel('Notifications', `<div class="pb">${!pushOk() ? `<p>${ios && !standalone ? 'On iPhone: tap Share → <b>Add to Home Screen</b>, open the app from the home screen, then come back here.' : 'This browser does not support push notifications.'}</p>`
-      : `<p>Get the daily brief (~06:30 SGT), the Sunday weekly report (17:00 SGT), and your watchlist price alerts on this device.</p>
-      <div class="row"><button class="btn" id="pushOn" ${sub ? 'hidden' : ''}>ENABLE NOTIFICATIONS</button><button class="btn ghost" id="pushTest" ${sub ? '' : 'hidden'}>SEND TEST</button><button class="btn ghost" id="pushOff" ${sub ? '' : 'hidden'}>TURN OFF</button></div>
-      <p class="note" id="pmsg">${sub ? 'On for this device.' : ''}${TOKEN ? '' : ' Needs the GitHub sync above first.'}</p>`}
-      <p class="note">Install as an app: iPhone Safari → Share → Add to Home Screen. Android Chrome → ⋮ → Install app. Desktop Chrome → install icon in the address bar.</p></div>`)}
-    ${panel('moomoo OpenAPI', `<div class="pb md">${LEARN.find(x => x.id === 'moomoo').html}</div>`)}
-    ${panel('Data & schedule', `<div class="pb"><p>Snapshot: <b>${esc(sgt(D.summary.at))} SGT</b> (${esc(D.summary.mode)}). Universe: ${Object.entries(D.summary.counts || {}).map(([m, c]) => `${m} ${Object.entries(c).map(([k, v]) => `${k}:${v}`).join(' ')}`).join(' · ')}.</p>
-      <ul><li>Mon–Sat 06:30 SGT: US close + daily AI brief + notifications</li><li>Mon–Fri 18:15 SGT: Asia close refresh</li><li>Sun 17:00 SGT: universe + Shariah re-screen + full weekly report</li></ul>
-      <p class="note">Prices: Yahoo Finance (delayed/end-of-day). Shariah: SC Malaysia SAC list (${esc(D.summary.sc?.asof || '?')}), SP Funds S&P Shariah ETF holdings, own AAOIFI-style ratio screen. News: Google News. Calendar: Forex Factory. AI: Gemini free tier (numbers-only reports if no key is set). Everything is encrypted with your password before it's published.</p>
-      <div class="row"><button class="btn ghost" id="logout">LOCK &amp; FORGET PASSWORD ON THIS DEVICE</button></div></div>`)}
-  </div>`;
-  $('#logout').onclick = () => { store.del('k'); location.reload(); };
-  $('#tokF')?.addEventListener('submit', async e => {
+VIEWS.wl = async (_, main) => {
+  const U = await universe();
+  const moo = await readData('moomoo.bin').catch(() => null);
+  const rows = wlItems().map(w => ({ w, r: D.bySym.get(w.s) || macroRow(w.s) }));
+  main.innerHTML = `<div class="grid wide">${panel(`${esc(ME.name)}'s watchlist`, `
+    <form class="row pb" id="wlAdd"><input class="f sp" id="wlIn" list="cmdList" placeholder="Add ticker: AAPL, 5347.KL, D05.SI, 7203.T" autocapitalize="characters"><button class="btn">ADD</button></form>
+    <div class="tw"><table><thead><tr><th>Ticker</th><th class="l">Name</th><th class="l">Status</th><th>Last</th><th>1D</th><th>1W</th><th>1M</th><th>RSI</th><th class="l">Bias</th><th>↑1W</th><th>↑1M</th>
+      <th title="Push alert when price goes above">Alert ≥</th><th title="Push alert when price goes below">Alert ≤</th><th class="l">Notes</th><th></th></tr></thead><tbody>
+    ${rows.map(({ w, r }) => `<tr data-s="${esc(w.s)}"><td class="l"><a class="sym" href="#stock/${encodeURIComponent(w.s)}">${esc(w.s)}</a></td><td class="nm l">${esc(r?.n || w.n)}</td>
+      <td class="l">${r ? badge(r.st) : '<span class="note">next update</span>'}</td><td>${px(r?.px)}${r?.live ? ' <span class="up" title="live">•</span>' : ''}</td><td>${pct(r?.r1)}</td><td>${pct(r?.r5)}</td><td>${pct(r?.r21)}</td><td>${r?.rsi?.toFixed(0) ?? '–'}</td>
+      <td class="l">${biasHtml(r?.bias)}</td><td>${fcCell(r?.fc, 5)}</td><td>${fcCell(r?.fc, 21)}</td>
+      <td><input class="f" style="width:84px" inputmode="decimal" data-f="above" value="${w.above ?? ''}"></td><td><input class="f" style="width:84px" inputmode="decimal" data-f="below" value="${w.below ?? ''}"></td>
+      <td class="l"><input class="f" style="width:220px" data-f="note" value="${esc(w.note || '')}" placeholder="Why am I watching this?"></td>
+      <td><button class="btn sm ghost" data-rm aria-label="Remove">✕</button></td></tr>`).join('') || '<tr><td colspan="15" class="l muted">Empty. Add tickers above, or tap ★ anywhere.</td></tr>'}
+    </tbody></table></div>
+    <p class="pb note">${esc(syncMsg || (TOKEN ? 'Synced across your devices.' : 'Saved on this device. Connect GitHub in Settings → Family to sync and get alerts.'))} Alerts (price ≥/≤, moves of ±${P().move}% or more) are checked about every 10 minutes by the live job, or every minute with the Cloudflare Worker.</p>`, '', 'span')}
+    ${moo ? panel(`moomoo · snapshot ${esc(sgt(moo.at))} SGT`, mooHtml(moo), '', 'span') : ''}
+    ${panel('Upcoming earnings (watchlists + big certified names)', `<ul class="list">${(D.summary.earnings || []).map(e => `<li><a href="#stock/${encodeURIComponent(e.s)}">${esc(e.s)}</a> ${esc(e.n)} <small>${esc(sgt(e.at))} SGT</small></li>`).join('') || '<li class="muted">None in the next 3 weeks.</li>'}</ul>`)}
+    </div>`;
+  $('#wlAdd').onsubmit = e => {
     e.preventDefault();
-    const t = $('#tok').value.trim(), msg = $('#tokMsg');
-    msg.textContent = 'Checking…'; TOKEN = t;
+    const raw = $('#wlIn').value.trim().toUpperCase(); if (!raw) return;
+    const s = U.find(r => r.s === raw)?.s || U.find(r => r.s.split('.')[0] === raw)?.s || raw;
+    if (!inWl(s)) toggleWl(s, U.find(r => r.s === s)?.n);
+    route(true);
+  };
+  $$('tr[data-s]', main).forEach(tr => {
+    const w = ST.wl.find(x => x.s === tr.dataset.s);
+    $$('input[data-f]', tr).forEach(inp => inp.onchange = () => {
+      const f = inp.dataset.f, v = inp.value.trim();
+      if (f !== 'note' && v !== '' && !(isFinite(+v) && +v > 0)) { toast('Enter a positive number'); return; }
+      w[f] = f === 'note' ? v : v === '' ? null : +v; w.u = now();
+      saveState(); toast('Saved');
+    });
+    $('[data-rm]', tr).onclick = () => { toggleWl(w.s); route(true); };
+  });
+  $$('[data-import]', main).forEach(b => b.onclick = () => { JSON.parse(b.dataset.import).forEach(s => { if (!inWl(s)) toggleWl(s, s); }); route(true); });
+};
+function mooHtml(m) {
+  const q = (m.quotes || []).map(x => `<tr><td class="l"><a class="sym" href="#stock/${encodeURIComponent(x.s)}">${esc(x.s)}</a></td><td class="nm l">${esc(x.n)}</td><td>${px(x.px)}</td><td>${pct(x.chg)}</td><td>${big(x.vol)}</td><td>${big(x.turnover)}</td></tr>`).join('');
+  const groups = Object.entries(m.groups || {}).map(([g, list]) => `<p><b>${esc(g)}</b> ${list.map(s => `<a href="#stock/${encodeURIComponent(s)}">${esc(s)}</a>`).join(', ')} <button class="btn sm ghost" data-import='${esc(JSON.stringify(list))}'>Add all to my watchlist</button></p>`).join('');
+  const pos = (m.positions || []).map(p => `<tr><td class="l">${esc(p.s)}</td><td>${p.qty}</td><td>${px(p.cost)}</td><td>${px(p.px)}</td><td>${pct(p.pl)}</td></tr>`).join('');
+  return `<div class="tw"><table><thead><tr><th>Ticker</th><th class="l">Name</th><th>Last</th><th>Chg</th><th>Volume</th><th>Turnover</th></tr></thead><tbody>${q}</tbody></table></div>
+    <div class="pb">${groups}${pos ? `<h3 class="amber">Positions</h3><div class="tw"><table><thead><tr><th>Ticker</th><th>Qty</th><th>Cost</th><th>Last</th><th>P/L</th></tr></thead><tbody>${pos}</tbody></table></div>` : ''}</div>`;
+}
+
+const zoyaUrl = r => !r.s.includes('.') && !/[\^=]/.test(r.s) ? `https://zoya.finance/stocks/${r.s}` : `https://www.google.com/search?q=${encodeURIComponent(`site:zoya.finance ${r.n}`)}`;
+VIEWS.stock = async (s, main) => {
+  await universe();
+  const r = D.bySym.get(s) || macroRow(s);
+  if (!r) {
+    main.innerHTML = `<div class="warn">${esc(s)} isn't in the tracked universe yet. Add it to your watchlist and the next update will fetch it, screen it and add a chart.</div>
+      <p>${star(s, s)} Add ${esc(s)} to watchlist · <a href="https://finance.yahoo.com/quote/${encodeURIComponent(s)}" target="_blank" rel="noopener">Yahoo Finance</a> · <a href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSym(s))}" target="_blank" rel="noopener">TradingView</a></p>`;
+    return;
+  }
+  const isEq = !!r.m;
+  const about = isEq ? (await mk('about.bin').catch(() => ({})))[s] || {} : {};
+  const fc = h => r.fc?.[h] || r.fc?.[String(h)];
+  const news = (D.summary.news || []).filter(n => n.sym === s);
+  const note = ST.notes[s]?.t || '';
+  const pr = P(), lot = PT.LOT(s);
+  main.innerHTML = `
+    <div class="qhead">${star(s, r.n)}<h1 style="margin:0">${esc(s)}</h1><span class="nm">${esc(r.n)}${isEq ? ` · ${MKT[r.m]} · ${esc(r.sec || '')}` : ''}</span>${badge(r.st)}
+      <span class="px mono">${px(r.px)}</span><span>${pct(r.r1)} today</span><span class="note">${esc(r.cur || '')} · ${r.live ? 'live' : 'close'} ${esc(r.d || '')}</span>
+      ${isEq ? `<a class="btn sm" href="#paper/${encodeURIComponent(s)}">PAPER TRADE</a>` : ''}</div>
+    <div class="grid wide">
+      <section class="panel span"><div class="ph"><h2>Chart</h2><div class="chips" id="rng">${['3M', '6M', '1Y', '2Y'].map(k => `<button class="chip ${k === '6M' ? 'on' : ''}" data-r="${k}">${k}</button>`).join('')}
+        <button class="chip" id="tvBtn" title="Live intraday chart from TradingView">LIVE (TradingView)</button></div></div>
+        <div class="chart" id="ch"><div class="legend" id="lg"></div></div><div class="tv" id="tv" hidden></div>
+        <div class="pb note">Candles daily · <span style="color:#ffe14d">SMA20</span> · <span style="color:#5fb4ff">SMA50</span> · <span style="color:#c38cff">SMA200</span> · volume · RSI(14) at the bottom · dashed amber = statistical 68% range for ~1W/1M/3M ahead.</div></section>
+      ${panel(`My notes on ${esc(s)}`, `<div class="pb"><textarea class="f" id="note" rows="4" placeholder="Thesis, entry plan, what would make me sell, things to check in the next results…">${esc(note)}</textarea>
+        <p class="note" id="noteMsg">${ST.notes[s]?.u ? `Saved ${esc(sgt(ST.notes[s].u))}` : 'Saves as you type. All your notes are in the NOTE tab.'}</p></div>`)}
+      ${isEq ? panel('Position size (risk-based)', `<div class="pb"><div class="form" id="ps">
+        <label>Account size<input class="f" data-k="acct" inputmode="decimal" value="${pr.acct}"></label><label>Risk per trade %<input class="f" data-k="risk" inputmode="decimal" value="${pr.risk}"></label>
+        <label>Entry<input class="f" data-k="entry" inputmode="decimal" value="${+(r.px || 0).toFixed(4)}"></label><label>Stop (default 1.5× ATR)<input class="f" data-k="stop" inputmode="decimal" value="${+((r.px || 0) * (1 - 1.5 * (r.atr || .02))).toFixed(4)}"></label></div>
+        <p id="psOut" class="mono"></p><p class="note">Shares = (account × risk%) ÷ (entry − stop), rounded down to board lots of ${lot}. Account and risk defaults are in Settings.</p></div>`) : ''}
+      ${panel('Outlook (statistical)', `<div class="tw"><table><thead><tr><th>Horizon</th><th>P(higher)</th><th>Likely range (68%)</th><th>Median path</th></tr></thead><tbody>
+        ${[[5, '~1 week'], [21, '~1 month'], [63, '~3 months']].map(([h, n]) => fc(h) ? `<tr><td class="l">${n}</td><td>${fcCell(r.fc, h)}</td><td>${px(fc(h).lo)} – ${px(fc(h).hi)}</td><td>${px(fc(h).mid)}</td></tr>` : '').join('')}</tbody></table></div>
+        <div class="pb"><p>Trend bias: ${biasHtml(r.bias)} (score ${r.score?.toFixed(0) ?? '–'} of ±100). ${techRead(r)}</p><p class="note">Based on how ${isEq ? MKT[r.m] : 'macro'} instruments with a similar trend score behaved over the past 2 years, scaled to this one's volatility. Markets can and do break these ranges; use a stop.</p></div>`)}
+      ${panel('Key stats', `<div class="kv">${kv([['Last', px(r.px)], ['1 week', pct(r.r5)], ['1 month', pct(r.r21)], ['3 months', pct(r.r63)], ['1 year', pct(r.r252)], ['YTD', pct(r.ytd)],
+        ['52w high', px(r.hi52)], ['52w low', px(r.lo52)], ['SMA 20', px(r.sma20)], ['SMA 50', px(r.sma50)], ['SMA 200', px(r.sma200)], ['RSI 14', r.rsi?.toFixed(1) ?? '–'],
+        ['ATR % (daily range)', r.atr ? (r.atr * 100).toFixed(2) + '%' : '–'], ['Rel. volume', r.rv ? r.rv.toFixed(2) + '×' : '–'], ['Avg traded/day (US$)', big(r.valusd)],
+        ...(isEq ? [['Market cap', big(r.mc)], ['P/E', r.pe?.toFixed(1) ?? '–'], ['Fwd P/E', r.fpe?.toFixed(1) ?? '–'], ['P/B', r.pb?.toFixed(2) ?? '–'], ['ROE', pct(r.roe, 1)],
+          ['Profit margin', pct(r.pm, 1)], ['Revenue growth', pct(r.rg, 1)], ['Dividend yield', r.dy == null ? '–' : r.dy.toFixed(2) + '%'], ['Beta', r.beta?.toFixed(2) ?? '–'],
+          ['Analyst target', px(r.tgt)], ['Analyst view', `${esc(r.rec || '–')} (${r.ana ?? 0})`], ['Next earnings', r.earn ? sgt(new Date(r.earn * 1000).toISOString(), { day: 'numeric', month: 'short', year: 'numeric' }) : '–']] : [])])}</div>`)}
+      ${isEq ? panel('Shariah compliance', `<div class="pb"><p>${badge(r.st)} <b>${esc(STATUS[r.st])}</b></p><ul>${(about.why || r.why || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
+        <p><a class="btn sm" href="${esc(zoyaUrl(r))}" target="_blank" rel="noopener">CHECK ON ZOYA ↗</a> <a class="btn sm ghost" href="https://musaffa.com/stock/${encodeURIComponent(r.s.split('.')[0])}" target="_blank" rel="noopener">MUSAFFA ↗</a>${r.m === 'MY' ? ' <a class="btn sm ghost" href="https://www.sc.com.my/development/icm/icm-publications/list-of-shariah-compliant-securities" target="_blank" rel="noopener">SC LIST ↗</a>' : ''}</p>
+        <p class="note">Zoya (AAOIFI methodology) shows the business screen, the debt/cash/interest-income ratios and a per-share purification amount for dividends. ${r.m === 'MY' ? 'For Bursa stocks the SC Malaysia list is the official word; Zoya is a second opinion.' : ''} Our ratios: debt/market cap ${pctp(r.dm)} · cash/market cap ${pctp(r.cm)}. See Learn → Shariah investing and Zoya.</p></div>`) : ''}
+      ${about.about ? panel('What the company does', `<div class="pb">${esc(about.about)}${about.about.length >= 690 ? '…' : ''}</div>`) : ''}
+      ${panel('Research links', `<div class="pb">${links(r)}</div>`)}
+      ${panel('Latest news', `<ul class="list">${news.map(n => `<li><a href="${esc(safe(n.u))}" target="_blank" rel="noopener">${esc(n.t)}</a><br><small>${esc(n.s || '')} · ${esc(n.at ? ago(n.at) : '')}</small></li>`).join('')
+        || `<li>No saved headlines (only watchlist names get them). <a href="https://news.google.com/search?q=${encodeURIComponent(`"${r.n}"`)}&hl=en-SG&gl=SG&ceid=SG:en" target="_blank" rel="noopener">Search Google News</a></li>`}</ul>`)}
+    </div>`;
+  let nt;
+  $('#note').oninput = e => {
+    clearTimeout(nt);
+    nt = setTimeout(() => { const t = e.target.value; ST.notes[s] = { t, u: now(), n: r.n }; saveState(); $('#noteMsg').textContent = t ? 'Saved' : 'Cleared'; }, 600);
+  };
+  const ps = () => {
+    const v = k => +($(`#ps [data-k=${k}]`)?.value || 0);
+    const per = v('entry') - v('stop'), riskAmt = v('acct') * v('risk') / 100;
+    if (!$('#psOut')) return;
+    if (!(per > 0)) { $('#psOut').textContent = 'Stop must be below entry for a long position.'; return; }
+    const sh = Math.floor(riskAmt / per / lot) * lot;
+    $('#psOut').innerHTML = `Buy <b>${sh.toLocaleString()}</b> shares${lot > 1 ? ` (${sh / lot} lots)` : ''} · position ${money(sh * v('entry'))} ${esc(r.cur || '')} · max loss ≈ ${money(sh * per)} (${v('risk')}% of account) · reward at 2R: ${px(v('entry') + 2 * per)}`;
+  };
+  $$('#ps input').forEach(i => i.oninput = ps); ps();
+  const bars = await mk(`ohlc/${s.replace(/[^A-Za-z0-9.-]/g, '_')}.bin`).catch(() => null);
+  if (!bars || !window.LightweightCharts) { $('#ch').innerHTML = '<p class="pb muted">Chart data unavailable.</p>'; return; }
+  drawChart(bars, r);
+  $('#tvBtn').onclick = () => {
+    const tv = $('#tv'), on = tv.hidden;
+    tv.hidden = !on; $('#ch').hidden = on; $('#tvBtn').classList.toggle('on', on);
+    if (on && !tv.firstChild) tv.innerHTML = `<iframe title="TradingView chart" style="width:100%;height:100%;border:0" src="https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSym(s))}&interval=D&theme=dark&style=1&timezone=Asia%2FSingapore&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=1&studies=%5B%5D&locale=en"></iframe>`;
+  };
+};
+
+// ---------------------------------------------------------------- paper trading
+// Market orders fill at the latest price; limit/stop orders rest and fill when a later quote crosses them
+// (checked whenever new prices arrive, and the live job sends a push when one triggers).
+function processOrders() {
+  if (!ME || !D.uni) return;
+  let n = 0;
+  for (const o of ST.paper.orders) {
+    const q = quoteOf(o.s), fill = PT.trigger(o, q);
+    if (fill == null) continue;
+    const t = PT.makeTrade(ST.paper, { ...o, id: 't' + o.id }, fill, q.cur, D.fx);
+    if (o.side === 'sell' && (PT.holdings(ST.paper).pos[o.s]?.q || 0) < o.q) { Object.assign(o, { status: 'cancelled', why: 'not enough shares', u: now() }); continue; }
+    ST.paper.trades.push(t); Object.assign(o, { status: 'filled', fill, u: now() }); n++;
+    toast(`Paper ${o.side} ${o.q} ${o.s} filled at ${px(fill)}`);
+  }
+  if (n) saveState();
+}
+VIEWS.paper = async (sym, main) => {
+  await universe();
+  processOrders();
+  const pa = ST.paper, fx = D.fx || D.summary.fx || {};
+  const val = PT.value(pa, s => quoteOf(s), fx);
+  const today = now().slice(0, 10);
+  if (!pa.eq.some(e => e.d === today) || Math.abs((pa.eq.find(e => e.d === today)?.v || 0) - val.equity) > 0.005) {
+    pa.eq = [...pa.eq.filter(e => e.d !== today), { d: today, v: +val.equity.toFixed(2), u: now() }]; store.set(`st:${ME.id}`, ST);
+  }
+  const B = pa.base, m = v => `${money(v)} ${B}`;
+  const open = pa.orders.filter(o => o.status === 'open' && o.at >= pa.resetAt);
+  const trades = pa.trades.filter(t => t.at >= pa.resetAt).sort((a, b) => b.at.localeCompare(a.at));
+  const pos = Object.values(val.pos);
+  const eq = pa.eq.filter(e => e.d >= pa.resetAt.slice(0, 10)).sort((a, b) => a.d.localeCompare(b.d));
+  main.innerHTML = `<div class="grid wide">
+    ${panel(`${esc(ME.name)}'s paper account · ${esc(B)}`, `<div class="kv">${kv([['Equity', m(val.equity)], ['Return', pct(val.ret)], ['Cash', m(val.cash)], ['Invested', m(val.invested)],
+      ['Unrealised P/L', `<span class="${cls(val.unrealised)}">${m(val.unrealised)}</span>`], ['Realised P/L', `<span class="${cls(val.realised)}">${m(val.realised)}</span>`], ['Fees paid', m(val.fees)], ['Started with', m(pa.start)],
+      ['Zakat estimate (2.5% of holdings + cash)', m(0.025 * Math.max(0, val.equity))]])}</div>
+      ${eq.length > 1 ? spark(eq.map(e => e.v)) : ''}
+      <p class="pb note">Virtual money for practice. Prices: live quotes when available, otherwise the latest close; Bursa/SGX quotes lag ~15 min. Fees ${pa.fee}% per trade. ${P().shariahOnly ? 'Shariah-only mode: buying non-compliant (F) stocks is blocked; no short selling or margin.' : 'Shariah-only mode is off (Settings).'} Zakat shown as the simple trading-shares method; ask your scholar for your case.</p>`, '', 'span')}
+    ${panel('Order ticket', `<form class="pb ticket" id="tk">
+      <div class="form"><label>Stock<input class="f" id="tkS" list="cmdList" value="${esc(sym || '')}" placeholder="AAPL, 5347.KL…" autocapitalize="characters" required></label>
+      <label>Side<span class="seg"><button type="button" data-side="buy" class="on buy">BUY</button><button type="button" data-side="sell">SELL</button></span></label>
+      <label>Type<span class="seg">${['market', 'limit', 'stop'].map((t, i) => `<button type="button" data-type="${t}" class="${i ? '' : 'on t'}">${t.toUpperCase()}</button>`).join('')}</span></label>
+      <label>Quantity (shares)<input class="f" id="tkQ" inputmode="numeric" placeholder="e.g. 100"></label>
+      <label id="tkPxL" hidden>Price<input class="f" id="tkPx" inputmode="decimal"></label></div>
+      <p id="tkInfo" class="mono"></p><p id="tkErr" class="err"></p><button class="btn" id="tkGo">PLACE ORDER</button></form>`)}
+    ${panel('Positions', `<div class="tw"><table><thead><tr><th>Ticker</th><th>Qty</th><th>Avg cost</th><th>Last</th><th>Value (${esc(B)})</th><th>P/L</th><th>P/L %</th><th class="l">Status</th><th></th></tr></thead><tbody>
+      ${pos.map(x => { const q = quoteOf(x.s); return `<tr class="go" data-go="stock/${encodeURIComponent(x.s)}"><td class="l"><span class="sym">${esc(x.s)}</span></td><td>${x.q.toLocaleString()}</td><td>${px(x.avg)}</td><td>${px(x.px)}</td><td>${money(x.value)}</td>
+        <td class="${cls(x.pl)}">${money(x.pl)}</td><td>${pct(x.plPct)}</td><td class="l">${badge(q?.st)}</td><td><button class="btn sm ghost" data-close="${esc(x.s)}" data-q="${x.q}">SELL ALL</button></td></tr>`; }).join('') || '<tr><td colspan="9" class="l muted">No positions yet. Place a market order to start.</td></tr>'}
+      </tbody></table></div>`, '', 'span')}
+    ${panel('Open orders', `<div class="tw"><table><thead><tr><th>Placed</th><th class="l">Order</th><th>Price</th><th>Last</th><th></th></tr></thead><tbody>
+      ${open.map(o => `<tr><td>${esc(sgt(o.at))}</td><td class="l">${o.side.toUpperCase()} ${o.q} ${esc(o.s)} ${o.type}</td><td>${px(o.px)}</td><td>${px(quoteOf(o.s)?.px)}</td><td><button class="btn sm ghost" data-cancel="${esc(o.id)}">CANCEL</button></td></tr>`).join('') || '<tr><td colspan="5" class="l muted">None.</td></tr>'}</tbody></table></div>`)}
+    ${panel('Trade history', `<div class="tw" style="max-height:360px"><table><thead><tr><th>Time</th><th class="l">Trade</th><th>Price</th><th>Value (${esc(B)})</th><th>Fee</th></tr></thead><tbody>
+      ${trades.map(t => `<tr><td>${esc(sgt(t.at))}</td><td class="l"><span class="${t.side === 'buy' ? 'up' : 'down'}">${t.side.toUpperCase()}</span> ${t.q} ${esc(t.s)}</td><td>${px(t.px)} ${esc(t.cur)}</td><td>${money(t.q * t.px * t.rate)}</td><td>${money(t.fee)}</td></tr>`).join('') || '<tr><td colspan="5" class="l muted">No trades yet.</td></tr>'}</tbody></table></div>`)}
+    <div id="board" class="span"></div>
+  </div>`;
+  // ticket
+  const T = { side: 'buy', type: 'market' };
+  const info = () => {
+    const s = $('#tkS').value.trim().toUpperCase(), q = quoteOf(s), qty = +$('#tkQ').value || 0;
+    const p = T.type === 'market' ? q?.px : +$('#tkPx').value;
+    const cost = q && p ? PT.convert(qty * p, q.cur, B, fx) : null;
+    $('#tkInfo').innerHTML = q ? `${esc(q.n)} ${badge(q.st)} · last ${px(q.px)} ${esc(q.cur)} · board lot ${PT.LOT(s)} · est. ${cost == null ? '–' : m(cost)} + fee` : (s ? 'Unknown ticker: pick one from the list.' : '');
+    $('#tkErr').textContent = '';
+  };
+  $$('#tk [data-side]').forEach(b => b.onclick = () => { T.side = b.dataset.side; $$('#tk [data-side]').forEach(x => x.className = x === b ? `on ${T.side}` : ''); info(); });
+  $$('#tk [data-type]').forEach(b => b.onclick = () => { T.type = b.dataset.type; $$('#tk [data-type]').forEach(x => x.className = x === b ? 'on t' : ''); $('#tkPxL').hidden = T.type === 'market'; info(); });
+  ['tkS', 'tkQ', 'tkPx'].forEach(id => $(`#${id}`).oninput = info); info();
+  $('#tk').onsubmit = e => {
+    e.preventDefault();
+    const s = $('#tkS').value.trim().toUpperCase(), q = quoteOf(s);
+    const o = { id: PT.rid(), s, side: T.side, type: T.type, q: +$('#tkQ').value, px: T.type === 'market' ? null : +$('#tkPx').value, at: now(), u: now(), status: 'open' };
+    const err = !q ? 'Unknown ticker or no price yet.' : PT.check(pa, o, q, fx, { shariahOnly: P().shariahOnly, status: q.st });
+    if (err) { $('#tkErr').textContent = err; return; }
+    if (o.type === 'market') {
+      pa.trades.push(PT.makeTrade(pa, o, q.px, q.cur, fx)); o.status = 'filled'; o.fill = q.px;
+      toast(`Paper ${o.side} ${o.q} ${s} at ${px(q.px)}`);
+    } else { o.reserve = o.side === 'buy' ? PT.convert(o.q * o.px, q.cur, B, fx) * (1 + pa.fee / 100) : 0; toast('Order placed'); }
+    pa.orders.push(o); saveState(); route(true);
+  };
+  $$('[data-cancel]', main).forEach(b => b.onclick = () => { Object.assign(pa.orders.find(o => o.id === b.dataset.cancel), { status: 'cancelled', u: now() }); saveState(); route(true); });
+  $$('[data-close]', main).forEach(b => b.onclick = () => { location.hash = `paper/${encodeURIComponent(b.dataset.close)}`; setTimeout(() => { $('#tk [data-side=sell]')?.click(); $('#tkQ').value = b.dataset.q; info(); }, 50); });
+  // family leaderboard: everyone's paper return, read-only
+  const rows = [];
+  for (const p of people()) {
+    const st = p.id === ME.id ? ST : mergeState(await readData(`p/${p.id}.bin`).catch(() => null), store.get(`st:${p.id}`, null));
+    if (!st?.paper) continue;
+    const v = PT.value(st.paper, s => quoteOf(s), fx);
+    rows.push({ p, ret: v.ret, eq: v.equity, base: st.paper.base, n: st.paper.trades.filter(t => t.at >= st.paper.resetAt).length });
+  }
+  if ($('#board')) $('#board').innerHTML = panel('Family leaderboard (paper)', `<div class="tw"><table><thead><tr><th>Who</th><th>Return</th><th>Equity</th><th>Trades</th></tr></thead><tbody>
+    ${rows.sort((a, b) => b.ret - a.ret).map(x => `<tr><td class="l"><span class="avatar" style="display:inline-grid;place-items:center;width:22px;height:22px;font-size:11px;background:${esc(x.p.color)}">${esc(x.p.name[0])}</span> ${esc(x.p.name)}</td><td>${pct(x.ret)}</td><td>${money(x.eq)} ${esc(x.base)}</td><td>${x.n}</td></tr>`).join('')}</tbody></table></div>`);
+};
+function spark(v) {
+  const W = 600, H = 90, lo = Math.min(...v), hi = Math.max(...v), y = x => H - 6 - (x - lo) / ((hi - lo) || 1) * (H - 12);
+  const pts = v.map((x, i) => `${(i / (v.length - 1) * W).toFixed(1)},${y(x).toFixed(1)}`).join(' ');
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="equity curve"><polyline points="${pts}" fill="none" stroke="${v[v.length - 1] >= v[0] ? '#2bd96b' : '#ff4d4d'}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+// ---------------------------------------------------------------- notes & journal
+VIEWS.notes = async (_, main) => {
+  const q = store.get('nq', '');
+  const notes = Object.entries(ST.notes).filter(([, v]) => v.t).sort((a, b) => (b[1].u || '').localeCompare(a[1].u || ''));
+  const jr = ST.journal.filter(j => !j.del).sort((a, b) => (b.d + b.at).localeCompare(a.d + a.at));
+  main.innerHTML = `<div class="row" style="margin-bottom:10px"><input class="f sp" id="nq" placeholder="Search notes and journal" value="${esc(q)}"></div>
+    <div class="grid wide">
+    ${panel('Trading journal', `<form class="pb" id="jf" style="display:grid;gap:8px"><div class="form"><label>Date<input class="f" type="date" id="jd" value="${now().slice(0, 10)}"></label><label>Ticker (optional)<input class="f" id="js" list="cmdList" autocapitalize="characters"></label></div>
+      <textarea class="f" id="jt" rows="3" placeholder="What I did, why, how I felt, what I learned…" required></textarea><button class="btn">ADD ENTRY</button></form>
+      <ul class="list" id="jl">${jr.map(j => `<li data-q="${esc((j.t + ' ' + (j.s || '')).toLowerCase())}"><small>${esc(j.d)}${j.s ? ` · <a href="#stock/${encodeURIComponent(j.s)}">${esc(j.s)}</a>` : ''}</small> <button class="btn sm ghost" style="float:right" data-del="${esc(j.id)}">✕</button><br>${esc(j.t).replace(/\n/g, '<br>')}</li>`).join('') || '<li class="muted">No entries yet. Reviewing a journal every Sunday with the weekly report is the fastest way to improve.</li>'}</ul>`)}
+    ${panel('Stock notes', `<ul class="list" id="nl">${notes.map(([s, v]) => `<li data-q="${esc((s + ' ' + (v.n || '') + ' ' + v.t).toLowerCase())}"><a class="sym" href="#stock/${encodeURIComponent(s)}">${esc(s)}</a> <span class="note">${esc(v.n || '')} · ${esc(v.u ? sgt(v.u) : '')}</span><br>${esc(v.t).replace(/\n/g, '<br>')}</li>`).join('') || '<li class="muted">Write notes on any stock page; they appear here.</li>'}</ul>`)}
+    </div>`;
+  const filt = () => { const v = $('#nq').value.toLowerCase(); store.set('nq', $('#nq').value); $$('#jl li[data-q], #nl li[data-q]').forEach(li => li.hidden = v && !li.dataset.q.includes(v)); };
+  $('#nq').oninput = filt; filt();
+  $('#jf').onsubmit = e => {
+    e.preventDefault();
+    ST.journal.push({ id: PT.rid(), d: $('#jd').value, s: $('#js').value.trim().toUpperCase() || null, t: $('#jt').value.trim(), at: now(), u: now() });
+    saveState(); route(true);
+  };
+  $$('[data-del]', main).forEach(b => b.onclick = () => { Object.assign(ST.journal.find(j => j.id === b.dataset.del), { del: true, u: now() }); saveState(); route(true); });
+};
+
+// ---------------------------------------------------------------- media + watch later
+VIEWS.media = async (_, main) => {
+  const M = D.summary.media || { vids: [], pods: [] };
+  const vids = [...M.vids].sort((a, b) => new Date(b.at) - new Date(a.at));
+  const later = ST.later.filter(x => !x.del);
+  const has = id => later.some(x => x.id === id);
+  const laterBtn = (id, t, src, url) => `<button class="btn sm ${has(id) ? '' : 'ghost'}" data-later="${esc(id)}" data-t="${esc(t)}" data-src="${esc(src)}" data-url="${esc(url)}">${has(id) ? '✓ SAVED' : '＋ WATCH LATER'}</button>`;
+  main.innerHTML = `<div class="grid wide">
+    ${panel(`${esc(ME.name)}'s watch later (${later.filter(x => !x.done).length} to go)`, `<ul class="list">${later.sort((a, b) => (a.done - b.done) || b.at.localeCompare(a.at)).map(x => `<li class="later">
+      <input type="checkbox" data-done="${esc(x.id)}" ${x.done ? 'checked' : ''} aria-label="Watched"><span><a href="${esc(safe(x.url))}" target="_blank" rel="noopener" ${x.done ? 'class="dim"' : ''}>${esc(x.t)}</a><br><small>${esc(x.src)} · saved ${esc(ago(x.at))}</small></span>
+      <button class="btn sm ghost" data-unlater="${esc(x.id)}" aria-label="Remove">✕</button></li>`).join('') || '<li class="muted">Tap “＋ Watch later” on any video or episode below.</li>'}</ul>`, '', 'span')}
+    ${panel('Start here · the video you shared', `<div class="embed"><iframe src="https://www.youtube-nocookie.com/embed/${FEATURED}" title="StockedUp: The Stock Market Is Being Manipulated…" allow="encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe></div>
+      <p class="pb note">StockedUp · "The Stock Market Is Being Manipulated…". Watch critically: what evidence is shown, and what would prove it wrong? ${laterBtn('yt:' + FEATURED, 'The Stock Market Is Being Manipulated…', 'StockedUp', `https://www.youtube.com/watch?v=${FEATURED}`)}</p>`)}
+    ${panel('Study plan · what to watch next', `<div class="pb">${RESOURCES.study.map(([t, q, why]) => `<p><a href="https://www.youtube.com/results?search_query=${encodeURIComponent(q)}" target="_blank" rel="noopener">▶ ${esc(t)}</a><br><span class="note">${esc(why)}</span></p>`).join('')}</div>`)}
+    ${panel('Latest from market channels', `<div class="pb vids">${vids.slice(0, 36).map(v => `<div class="vid-wrap"><a class="vid" href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener"><img loading="lazy" alt="" src="https://i.ytimg.com/vi/${esc(v.id)}/mqdefault.jpg"><div>${esc(v.t)}<small>${esc(v.src)} · ${v.at ? esc(ago(v.at)) : ''}</small></div></a>${laterBtn('yt:' + v.id, v.t, v.src, `https://www.youtube.com/watch?v=${v.id}`)}</div>`).join('') || '<p class="muted">Video feeds were unavailable at the last update.</p>'}</div>`, '', 'span')}
+    ${panel('Latest podcast episodes', `<ul class="list">${M.pods.map(p => `<li><b class="amber">${esc(p.src)}</b><br><a href="${esc(safe(p.u))}" target="_blank" rel="noopener">${esc(p.t)}</a> <small>${p.at ? esc(ago(p.at)) : ''}</small> ${laterBtn('pod:' + (p.u || p.t), p.t, p.src, p.u || '#')}</li>`).join('')}</ul>`)}
+    ${panel('Channels & shows to follow', `<div class="pb">${RESOURCES.channels.map(([t, u, d]) => `<p><a href="${esc(safe(u))}" target="_blank" rel="noopener">${esc(t)}</a> <span class="note">${esc(d)}</span></p>`).join('')}</div>`)}
+  </div>`;
+  $$('[data-later]', main).forEach(b => b.onclick = () => {
+    const x = ST.later.find(l => l.id === b.dataset.later);
+    if (x && !x.del) Object.assign(x, { del: true, u: now() });
+    else if (x) Object.assign(x, { del: false, done: false, at: now(), u: now() });
+    else ST.later.push({ id: b.dataset.later, t: b.dataset.t, src: b.dataset.src, url: b.dataset.url, at: now(), u: now(), done: false });
+    saveState(); route(true);
+  });
+  $$('[data-done]', main).forEach(c => c.onchange = () => { Object.assign(ST.later.find(l => l.id === c.dataset.done), { done: c.checked, u: now() }); saveState(); route(true); });
+  $$('[data-unlater]', main).forEach(b => b.onclick = () => { Object.assign(ST.later.find(l => l.id === b.dataset.unlater), { del: true, u: now() }); saveState(); route(true); });
+};
+
+// ---------------------------------------------------------------- settings
+VIEWS.settings = async (_, main) => {
+  const sub = await currentSub(), pr = P();
+  const tokenUrl = `https://github.com/settings/personal-access-tokens/new?name=${encodeURIComponent('AMA Stock Screener sync')}&description=${encodeURIComponent('Lets the family site save profiles, watchlists, paper trades and notifications')}&target_name=${encodeURIComponent(REPO.split('/')[0])}&contents=write&actions=write`;
+  const ios = /iPhone|iPad/.test(navigator.userAgent), standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  const N = [['daily', 'Daily brief ready (~06:30 SGT)'], ['weekly', 'Weekly report ready (Sun 17:00 SGT)'], ['alerts', 'Watchlist price alerts'], ['moves', 'Big moves in my watchlist'], ['orders', 'Paper orders triggered'], ['breaking', 'Breaking market headlines (busy!)']];
+  main.innerHTML = `<div class="grid">
+    ${panel(`Profile · ${esc(ME.name)}`, `<form class="pb" id="pf" style="display:grid;gap:10px"><div class="form"><label>Name<input class="f" id="pfN" maxlength="20" value="${esc(ME.name)}"></label>
+      <label>New PIN (blank = keep, “none” = remove)<input class="f" id="pfPin" inputmode="numeric" maxlength="8" autocomplete="off"></label></div>
+      <div class="swatches">${COLORS.map((c, i) => `<input type="radio" name="pfc" id="pfc${i}" value="${c}" ${c === ME.color ? 'checked' : ''}><label for="pfc${i}" style="background:${c}"></label>`).join('')}</div>
+      <div class="row"><button class="btn">SAVE PROFILE</button><button type="button" class="btn ghost" id="pfSwitch">SWITCH PROFILE</button><button type="button" class="btn ghost" id="pfDel">DELETE PROFILE…</button></div><p class="err" id="pfMsg"></p></form>`)}
+    ${panel('My preferences', `<form class="pb" id="prf"><div class="form">
+      <label>Home tab<select class="f" name="home">${TABS.map(([id, , n]) => `<option value="${id}" ${pr.home === id ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      <label>Default ideas market<select class="f" name="mkt">${Object.entries(MKT).map(([k, n]) => `<option value="${k}" ${pr.mkt === k ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      <label>Account size for position sizing<input class="f" name="acct" inputmode="decimal" value="${pr.acct}"></label>
+      <label>Risk per trade %<input class="f" name="risk" inputmode="decimal" value="${pr.risk}"></label>
+      <label>Big-move alert threshold %<input class="f" name="move" inputmode="decimal" value="${pr.move}"></label></div>
+      <label class="toggle"><input type="checkbox" name="ticker" ${pr.ticker ? 'checked' : ''}> Show the breaking-news ticker</label>
+      <label class="toggle"><input type="checkbox" name="shariahOnly" ${pr.shariahOnly ? 'checked' : ''}> Shariah-only paper trading (block status F buys)</label>
+      <button class="btn">SAVE PREFERENCES</button></form>`)}
+    ${panel('Paper account', `<form class="pb" id="paf"><div class="form"><label>Starting cash<input class="f" name="start" inputmode="decimal" value="${ST.paper.start}"></label>
+      <label>Base currency<select class="f" name="base">${['SGD', 'USD', 'MYR'].map(c => `<option ${ST.paper.base === c ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
+      <label>Fee per trade %<input class="f" name="fee" inputmode="decimal" value="${ST.paper.fee}"></label></div>
+      <p class="note">Changing these starts a fresh account (old trades stay in history but no longer count).</p><button class="btn ghost" id="paReset">RESET PAPER ACCOUNT…</button></form>`)}
+    ${panel('Notifications on this device', `<div class="pb">${!pushOk() ? `<p>${ios && !standalone ? 'On iPhone: tap Share → <b>Add to Home Screen</b>, open the app from the home screen, then come back here.' : 'This browser does not support push notifications.'}</p>`
+      : `<div class="row"><button class="btn" id="pushOn" ${sub ? 'hidden' : ''}>ENABLE FOR ${esc(ME.name.toUpperCase())}</button><button class="btn ghost" id="pushTest" ${sub ? '' : 'hidden'}>SEND TEST</button><button class="btn ghost" id="pushOff" ${sub ? '' : 'hidden'}>TURN OFF</button></div>
+      <p class="note" id="pmsg">${sub ? (ST.subs.some(s => s.endpoint === sub.endpoint && !s.del) ? `On for ${esc(ME.name)} on this device.` : 'This device is subscribed for another profile. Tap Enable to move it here.') : ''}${TOKEN ? '' : ' Needs GitHub sync (Family below) first.'}</p>`}
+      <form id="nf">${N.map(([k, n]) => `<label class="toggle"><input type="checkbox" name="${k}" ${pr.notify[k] ? 'checked' : ''}> ${n}</label>`).join('')}</form>
+      <p class="note">Install as an app: iPhone Safari → Share → Add to Home Screen · Android Chrome → ⋮ → Install app · Desktop Chrome → install icon in the address bar.</p></div>`)}
+    ${panel('Family · GitHub sync & live data', `<div class="pb">${TOKEN ? `<p class="up">GitHub sync connected for the whole family (${esc(REPO)}).</p>` : `<p>One-time setup for the whole family: create a fine-grained GitHub token for <b>${esc(REPO)}</b> only, with <b>Contents</b> and <b>Actions</b> set to Read and write. It's stored encrypted with the family password, so every family device picks it up automatically.</p>
+      <p><a class="btn ghost" href="${esc(tokenUrl)}" target="_blank" rel="noopener">CREATE TOKEN ON GITHUB ↗</a></p>`}
+      <form class="row" id="tokF"><input class="f sp" id="tok" type="password" placeholder="${TOKEN ? 'Replace token: github_pat_…' : 'github_pat_…'}" autocomplete="off"><button class="btn">${TOKEN ? 'REPLACE' : 'SAVE'}</button></form><p class="err" id="tokMsg"></p>
+      <h3 class="amber">Live prices: optional Cloudflare Worker</h3><p class="note">Without it, prices refresh about every 10 minutes from GitHub. With the free Worker (see Learn → Hosting), quotes and headlines refresh every minute.</p>
+      <form class="form" id="wkF"><label>Worker URL<input class="f" id="wkU" placeholder="https://ama-live.<you>.workers.dev" value="${esc(CFG.worker?.url || '')}"></label><label>Worker key<input class="f" id="wkK" type="password" autocomplete="off" value="${esc(CFG.worker?.key || '')}"></label><button class="btn ghost">SAVE WORKER</button></form><p class="note" id="wkMsg"></p></div>`)}
+    ${panel('Data & backup', `<div class="pb"><p>Snapshot <b>${esc(sgt(D.summary.at))} SGT</b> (${esc(D.summary.mode)}) · live ${LIVE ? esc(sgt(LIVE.at)) + ' via ' + (liveFrom === 'worker' ? 'Worker' : 'GitHub') : 'not yet'}. Universe: ${Object.entries(D.summary.counts || {}).map(([m, c]) => `${m} ${Object.entries(c).map(([k, v]) => `${k}:${v}`).join(' ')}`).join(' · ')}.</p>
+      <ul><li>Every ~10 min: live quotes, FX, breaking news, alerts</li><li>Mon–Sat 06:30 SGT: US close + daily AI brief</li><li>Mon–Fri 18:15 SGT: Asia close refresh</li><li>Sun 17:00 SGT: universe + Shariah re-screen + full weekly report</li></ul>
+      <div class="row"><button class="btn ghost" id="exp">EXPORT MY DATA</button><label class="btn ghost" style="cursor:pointer">IMPORT…<input type="file" id="imp" accept="application/json" hidden></label><button class="btn ghost" id="logout">LOCK THIS DEVICE</button></div>
+      <p class="note">Sources: Yahoo Finance (delayed), SC Malaysia SAC list (${esc(D.summary.sc?.asof || '?')}), SP Funds S&P Shariah ETF holdings, own AAOIFI-style screen, Zoya/Musaffa links, Google News, Forex Factory, YouTube/podcast RSS. Everything published is AES-256-GCM encrypted with the family password.</p></div>`)}
+    ${panel('moomoo OpenAPI', `<div class="pb md">${LEARN.find(x => x.id === 'moomoo').html}</div>`)}
+  </div>`;
+  const msg = (id, t) => { const el = $(`#${id}`); if (el) el.textContent = t; };
+  $('#pf').onsubmit = async e => {
+    e.preventDefault();
+    const p = FAMILY.list.find(x => x.id === ME.id), pin = $('#pfPin').value.trim();
+    if (pin && pin !== 'none' && !/^\d{4,8}$/.test(pin)) return msg('pfMsg', 'PIN must be 4–8 digits, or “none”.');
+    p.name = $('#pfN').value.trim() || p.name; p.color = $('input[name=pfc]:checked').value; p.u = now();
+    if (pin === 'none') p.pin = null; else if (pin) { const salt = PT.rid(); p.pin = { salt, h: await sha(salt + pin) }; }
+    ME = p; paintMe();
+    try { await saveFamily(); toast('Profile saved'); } catch (x) { toast(`Saved here only: ${x.message}`); }
+    route(true);
+  };
+  $('#pfSwitch').onclick = () => pickProfile();
+  let delArm = false;
+  $('#pfDel').onclick = async () => {
+    if (people().length < 2) return msg('pfMsg', 'This is the only profile.');
+    if (!delArm) { delArm = true; $('#pfDel').textContent = 'TAP AGAIN TO DELETE'; return; }
+    Object.assign(FAMILY.list.find(x => x.id === ME.id), { del: true, u: now() });
+    await saveFamily().catch(() => {}); store.del('me'); ME = null; pickProfile('Profile deleted.');
+  };
+  $('#prf').onsubmit = e => {
+    e.preventDefault();
+    const f = new FormData(e.target), num = (k, lo, hi) => Math.min(hi, Math.max(lo, +f.get(k) || DEF_PREFS[k]));
+    ST.prefs = { ...pr, home: f.get('home'), mkt: f.get('mkt'), acct: num('acct', 1, 1e9), risk: num('risk', 0.1, 10), move: num('move', 1, 50), ticker: !!f.get('ticker'), shariahOnly: !!f.get('shariahOnly') };
+    saveState(); paintTicker(); toast('Preferences saved');
+  };
+  $('#nf').onchange = () => { const f = new FormData($('#nf')); ST.prefs = { ...P(), notify: Object.fromEntries(N.map(([k]) => [k, !!f.get(k)])) }; saveState(); toast('Notification settings saved'); };
+  let resetArm = false;
+  $('#paf').onsubmit = e => {
+    e.preventDefault();
+    if (!resetArm) { resetArm = true; $('#paReset').textContent = 'TAP AGAIN: START A NEW ACCOUNT'; return; }
+    const f = new FormData(e.target);
+    Object.assign(ST.paper, { start: Math.max(100, +f.get('start') || 100000), base: f.get('base'), fee: Math.max(0, Math.min(2, +f.get('fee') || 0)), resetAt: now(), eq: [] });
+    ST.paper.orders.filter(o => o.status === 'open').forEach(o => Object.assign(o, { status: 'cancelled', u: now() }));
+    saveState(); toast('New paper account started'); location.hash = 'paper';
+  };
+  $('#tokF').onsubmit = async e => {
+    e.preventDefault();
+    const t = $('#tok').value.trim(); if (!t) return;
+    msg('tokMsg', 'Checking…');
+    const prev = TOKEN; TOKEN = t;
     try {
       const repo = await (await gh('')).json();
       if (!repo.permissions?.push) throw new Error('That token can read but not write this repository.');
-      await putData('vault.bin', await seal({ token: t, at: Date.now() }), 'vault: store sync token');
-      await putData('state.bin', await seal({ ...ST, at: Date.now() }), 'state: first sync');
-      toast('Connected'); route();
-    } catch (x) { TOKEN = null; msg.textContent = x.status === 401 ? 'GitHub rejected that token.' : x.status === 404 ? 'Token cannot see this repository; check repository access.' : x.message; }
-  });
-  $('#forget')?.addEventListener('click', async () => { TOKEN = null; toast('Token disconnected on this device (still saved for others).'); route(); });
-  $('#refresh')?.addEventListener('click', async () => {
-    try { await gh('actions/workflows/market.yml/dispatches', { method: 'POST', body: JSON.stringify({ ref: 'main', inputs: { mode: 'evening' } }) }); $('#rmsg').textContent = 'Started. New data in ~10–15 minutes.'; }
-    catch (x) { $('#rmsg').textContent = `Couldn't start it (${x.message}). The token needs Actions: Read and write.`; }
-  });
+      await saveVault({ ...CFG, token: t, at: Date.now() });
+      await saveFamily(); saveState(); toast('GitHub sync connected for the family'); route(true);
+    } catch (x) { TOKEN = prev; msg('tokMsg', x.status === 401 ? 'GitHub rejected that token.' : x.status === 404 ? 'Token cannot see this repository; check repository access.' : x.message); }
+  };
+  $('#wkF').onsubmit = async e => {
+    e.preventDefault();
+    if (!TOKEN) return msg('wkMsg', 'Connect GitHub sync first.');
+    const url = $('#wkU').value.trim(), key = $('#wkK').value.trim();
+    if (url && !/^https:\/\//.test(url)) return msg('wkMsg', 'The Worker URL must start with https://');
+    try {
+      if (url) { const r = await fetch(`${url.replace(/\/$/, '')}/q?k=${encodeURIComponent(key)}&s=AAPL`); if (!r.ok) throw new Error(`Worker answered ${r.status}`); }
+      await saveVault({ ...CFG, worker: url ? { url, key } : null }); msg('wkMsg', url ? 'Worker saved: prices now refresh every minute.' : 'Worker removed.'); pollLive();
+    } catch (x) { msg('wkMsg', x.message); }
+  };
+  $('#exp').onclick = () => {
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([JSON.stringify({ profile: ME, state: ST }, null, 1)], { type: 'application/json' })), download: `ama-${ME.id}-${now().slice(0, 10)}.json` });
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  $('#imp').onchange = async e => {
+    try { const j = JSON.parse(await e.target.files[0].text()); ST = mergeState(ST, { ...j.state, at: Date.now() }); saveState(); toast('Imported and merged'); route(true); }
+    catch (x) { toast(`Import failed: ${x.message}`); }
+  };
+  $('#logout').onclick = () => { store.del('k'); store.del('me'); location.reload(); };
   $('#pushOn')?.addEventListener('click', enablePush);
   $('#pushOff')?.addEventListener('click', disablePush);
   $('#pushTest')?.addEventListener('click', async () => {
-    try { await gh('dispatches', { method: 'POST', body: JSON.stringify({ event_type: 'test-push' }) }); $('#pmsg').textContent = 'Test sent. It arrives in about a minute.'; }
-    catch (x) { $('#pmsg').textContent = `Couldn't send (${x.message}).`; }
+    try { await gh('dispatches', { method: 'POST', body: JSON.stringify({ event_type: 'test-push', client_payload: { profile: ME.id } }) }); msg('pmsg', 'Test sent. It arrives in 1–2 minutes.'); }
+    catch (x) { msg('pmsg', `Couldn't send (${x.message}).`); }
   });
 };
 
@@ -674,22 +1122,29 @@ VIEWS.settings = async (_, main) => {
 const pushOk = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 async function currentSub() { try { return await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription(); } catch { return null; } }
 async function enablePush() {
-  const msg = $('#pmsg');
-  if (!TOKEN) { msg.textContent = 'Connect GitHub sync first (above) so the server knows where to send.'; return; }
+  const msg = t => { const el = $('#pmsg'); if (el) el.textContent = t; };
+  if (!TOKEN) return msg('Connect GitHub sync first (Family section) so the server knows where to send.');
   try {
-    if (await Notification.requestPermission() !== 'granted') { msg.textContent = 'Permission denied. Allow notifications for this site in your browser settings.'; return; }
+    if (await Notification.requestPermission() !== 'granted') return msg('Permission denied. Allow notifications for this site in your browser or phone settings.');
     const reg = await navigator.serviceWorker.register('sw.js');
     await navigator.serviceWorker.ready;
     const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64(VAPID.replace(/-/g, '+').replace(/_/g, '/')) });
     const j = sub.toJSON();
-    ST.subs = [...ST.subs.filter(s => s.endpoint !== j.endpoint), { ...j, dev: navigator.userAgent.slice(0, 80), at: Date.now() }];
-    saveState(); toast('Notifications on'); setTimeout(route, 900);
-  } catch (e) { msg.textContent = `Couldn't enable: ${e.message}`; }
+    // One device notifies one profile: drop this endpoint from whichever profile had it before.
+    const prev = store.get('pushProfile');
+    if (prev && prev !== ME.id) {
+      const st = await readData(`p/${prev}.bin`).catch(() => null);
+      if (st) { (st.subs || []).forEach(s => { if (s.endpoint === j.endpoint) Object.assign(s, { del: true, u: now() }); }); st.at = Date.now(); await putData(`p/${prev}.bin`, await seal(st), `profile ${prev}: move device`).catch(() => {}); }
+    }
+    store.set('pushProfile', ME.id);
+    ST.subs = [...ST.subs.filter(s => s.endpoint !== j.endpoint), { ...j, dev: navigator.userAgent.slice(0, 80), at: now(), u: now() }];
+    saveState(); toast('Notifications on'); setTimeout(() => route(true), 1200);
+  } catch (e) { msg(`Couldn't enable: ${e.message}`); }
 }
 async function disablePush() {
   const sub = await currentSub();
-  if (sub) { ST.subs = ST.subs.filter(s => s.endpoint !== sub.endpoint); await sub.unsubscribe().catch(() => {}); saveState(); }
-  toast('Notifications off'); setTimeout(route, 900);
+  if (sub) { ST.subs.forEach(s => { if (s.endpoint === sub.endpoint) Object.assign(s, { del: true, u: now() }); }); await sub.unsubscribe().catch(() => {}); store.del('pushProfile'); saveState(); }
+  toast('Notifications off'); setTimeout(() => route(true), 900);
 }
 
 // ---------------------------------------------------------------- boot
@@ -711,9 +1166,15 @@ function showLogin(note = '') {
 }
 async function start() {
   $('#login').hidden = true; $('#app').hidden = false;
+  D.fx = D.summary.fx || {};
   shell();
-  await loadState();
-  route();
+  await loadVault();
+  await loadFamily();
+  const me = store.get('me');
+  if (me && people().some(p => p.id === me)) await loadMe(me); else pickProfile();
+  universe().then(() => { applyLive(); processOrders(); }).catch(() => {});
+  loadLive().then(() => { processOrders(); if (ME) softRoute(); }).catch(() => {});
+  if (ME) route();
   if (pushOk() && (await currentSub())) navigator.serviceWorker.register('sw.js');  // keep the worker fresh
   navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.type === 'open') location.hash = e.data.hash; });
 }

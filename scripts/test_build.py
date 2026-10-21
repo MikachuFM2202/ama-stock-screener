@@ -35,4 +35,18 @@ assert b.unverified('S&P at 4,112.63', ctx) == ['4,112.63']
 for y, m in [('AAPL', 'US.AAPL'), ('BRK-B', 'US.BRK.B'), ('D05.SI', 'SG.D05'), ('0700.HK', 'HK.00700'), ('5347.KL', 'MY.5347')]:
     assert moo(y) == m and yahoo(m) == y, (y, m, moo(y), yahoo(m))
 assert moo('^GSPC') is None and moo('GC=F') is None
+# Family profiles: positions from trades (respecting resets), alerts fire once a day, triggered paper orders
+st = {'wl': [{'s': 'AAPL', 'above': 300}, {'s': 'MSFT', 'del': True, 'above': 1}],
+      'paper': {'resetAt': '2026-10-01', 'trades': [{'s': 'AAPL', 'side': 'buy', 'q': 10, 'at': '2026-10-02'}, {'s': 'AAPL', 'side': 'sell', 'q': 4, 'at': '2026-10-03'},
+                                                    {'s': 'OLD', 'side': 'buy', 'q': 5, 'at': '2026-09-01'}],
+                'orders': [{'id': 'o1', 's': 'NVDA', 'side': 'buy', 'type': 'limit', 'px': 100, 'status': 'open', 'at': '2026-10-04'}]}}
+assert b.positions(st) == {'AAPL': 6}
+assert set(b.family_symbols([({'id': 'a'}, st)])) == {'AAPL', 'NVDA'}
+sent = {}
+q = {'AAPL': {'p': 310, 'c': 0.01}, 'MSFT': {'p': 500, 'c': 0}, 'NVDA': {'p': 101, 'c': 0, 'h': 105, 'l': 99}}
+m = b.alerts({'id': 'a'}, st, q, sent, '2026-10-21')
+assert [x['tag'] for x in m] == ['AAPL:above', 'order:o1'], m
+assert b.alerts({'id': 'a'}, st, q, sent, '2026-10-21') == []             # once a day
+st['prefs'] = {'notify': {'alerts': False, 'orders': False}, 'move': 0.5}
+assert [x['tag'] for x in b.alerts({'id': 'b'}, st, q, {}, '2026-10-21')] == ['AAPL:move']   # 1% move >= 0.5% threshold
 print('ok')

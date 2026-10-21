@@ -1,7 +1,7 @@
 {
-  "name": "Halal Terminal",
-  "short_name": "Halal Terminal",
-  "description": "Private Shariah-compliant market terminal",
+  "name": "AMA Stock Screener",
+  "short_name": "AMA Screener",
+  "description": "Private family Shariah-compliant stock screener",
   "start_url": "./#mkt",
   "scope": "./",
   "display": "standalone",

@@ -26,13 +26,14 @@ jobs:
         run: |
           mkdir -p out
           git fetch --depth 1 origin market && git archive origin/market | tar -x -C out || echo "no market branch yet"
-          if ! git fetch --depth 1 origin data; then  # first run: the site writes its encrypted state here
+          if ! git fetch --depth 1 origin data; then  # first run: the site writes its encrypted family data here
             d=$(mktemp -d) && cd "$d" && git init -q -b data
-            echo "Encrypted personal state (watchlist, alerts, push subscriptions, sync token). Never reset this branch." > README.md
+            echo "Encrypted family data (profiles, watchlists, paper trading, push subscriptions, sync token). Never reset this branch." > README.md
             git add README.md && git -c user.name=market-bot -c user.email=market-bot@users.noreply.github.com commit -qm "data: init"
             git push -q "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data && cd - >/dev/null
+            git fetch --depth 1 origin data
           fi
-          git show origin/data:state.bin > state.bin 2>/dev/null || rm -f state.bin
+          mkdir -p datadir && git archive origin/data | tar -x -C datadir
       - name: Pick mode
         id: m
         run: |
@@ -47,7 +48,8 @@ jobs:
         env:
           SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
           OUT: out
-          STATE: state.bin
+          DATA: datadir
+          PROFILE: ${{ github.event.client_payload.profile }}
           PUSH_OUT: push.json
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}

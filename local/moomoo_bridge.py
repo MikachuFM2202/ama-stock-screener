@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-REPO = os.environ.get('REPO', 'MikachuFM2202/stocks-tracker')
+REPO = os.environ.get('REPO', 'MikachuFM2202/ama-stock-screener')
 API = f'https://api.github.com/repos/{REPO}/contents'
 SGT = dt.timezone(dt.timedelta(hours=8))
 SUFFIX = {'SG': '.SI', 'MY': '.KL', 'HK': '.HK', 'JP': '.T', 'SH': '.SS', 'SZ': '.SZ', 'AU': '.AX', 'CA': '.TO'}
@@ -77,8 +77,9 @@ def snapshot(args, vault):
             for name in g['group_name']:
                 ret, d = q.get_user_security(name)
                 if ret == mm.RET_OK and len(d): groups[name] = [yahoo(c) for c in d['code']]
-        state = vault.read('state.bin') or {}
-        wanted = {moo(w['s']) for w in state.get('wl', [])} | {moo(s) for v in groups.values() for s in v}
+        family = vault.read('profiles.bin') or {}
+        wl = [w for p in family.get('list', []) if not p.get('del') for w in (vault.read(f'p/{p["id"]}.bin') or {}).get('wl', []) if not w.get('del')]
+        wanted = {moo(w['s']) for w in wl} | {moo(s) for v in groups.values() for s in v}
         codes = sorted(c for c in wanted if c)
         quotes = []
         for i in range(0, len(codes), 200):

@@ -1,0 +1,41 @@
+# Every ~10 minutes: latest quotes (macro, ideas, every family watchlist and paper position), FX and breaking news,
+# written encrypted to the tiny orphan `live` branch, plus price/order/breaking alerts.
+name: live
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+  repository_dispatch: { types: [refresh] }
+permissions: { contents: write }
+concurrency: { group: live, cancel-in-progress: false }
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12', cache: pip, cache-dependency-path: scripts/requirements.txt }
+      - run: pip install -r scripts/requirements.txt
+      - name: Restore branches
+        run: |
+          mkdir -p out datadir liveout
+          git fetch --depth 1 origin market && git archive origin/market meta.json summary.bin | tar -x -C out
+          git fetch --depth 1 origin data && git archive origin/data | tar -x -C datadir || true
+          git fetch --depth 1 origin live && git archive origin/live | tar -x -C liveout || true
+      - run: python scripts/build.py live
+        env: { SITE_PASSWORD: '${{ secrets.SITE_PASSWORD }}', OUT: out, DATA: datadir, LIVE_OUT: liveout, PUSH_OUT: push.json }
+      - name: Publish live branch
+        working-directory: liveout
+        run: |
+          git init -q -b live
+          git add -A
+          git -c user.name=live-bot -c user.email=live-bot@users.noreply.github.com commit -qm "live: $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" live
+        env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+      - name: Push notifications
+        if: hashFiles('push.json') != ''
+        run: |
+          npm i --no-save --no-audit --no-fund --prefix scripts web-push@3.6.7
+          node scripts/push.mjs push.json
+        env: { VAPID_PRIVATE: '${{ secrets.VAPID_PRIVATE_KEY }}' }

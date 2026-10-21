@@ -49,8 +49,9 @@ export const PATTERNS = [
 // ---------------------------------------------------------------- lessons
 const box = (title, body) => `<blockquote><b>${title}</b><br>${body}</blockquote>`;
 export const LEARN = [
-  { id: 'start', t: 'Start here: using this terminal', lvl: 'Everyone', html: `
-<p>This site pulls prices for about 1,300 stocks across Malaysia, Singapore, the US and global markets, plus indices, commodities, currencies and rates, then screens every stock for Shariah compliance and ranks ideas. Everything is encrypted with your password before it is published.</p>
+  { id: 'start', t: 'Start here: using AMA Stock Screener', lvl: 'Everyone', html: `
+<p>AMA Stock Screener tracks about 1,650 stocks across Malaysia, Singapore, the US and global markets, plus indices, commodities, currencies and rates. It screens every stock for Shariah compliance and ranks ideas. Each family member has their own <b>profile</b> (tap the round avatar, top right) with their own watchlist, notes, paper-trading account, watch-later list and notifications. Everything is encrypted with the family password before it is published.</p>
+<p><b>Freshness:</b> quotes and breaking news refresh about every 10 minutes (every minute with the optional Cloudflare Worker). The full analysis runs after each market close. Tap <b>⟳</b> to fetch fresh prices now.</p>
 <h2>Tabs</h2>
 <ul>
 <li><b>MKT</b>: market sessions in Singapore time, the outlook for the next week, month and 3 months, indices, Shariah ETFs, commodities, FX and rates, sector heat and top movers.</li>
@@ -58,6 +59,8 @@ export const LEARN = [
 <li><b>IDEA</b>: ranked Shariah-compliant ideas per market: invest/swing and day-trade watch.</li>
 <li><b>SCRN</b>: the whole universe, filterable by market, Shariah status and sector, and sortable on any column.</li>
 <li><b>WL</b>: your watchlist with notes and price alerts (push notifications).</li>
+<li><b>PAPR</b>: paper trading: practise with virtual money at real prices, with a family leaderboard.</li>
+<li><b>NOTE</b>: your stock notes and trading journal.</li>
 <li><b>NEWS</b>: headlines by theme, the week's economic calendar in SGT, upcoming earnings.</li>
 <li><b>TV</b>: latest videos and podcast episodes from market channels, and a study plan.</li>
 <li><b>EDU</b> and <b>GLOS</b>: this course and the terminology list.</li>
@@ -281,11 +284,55 @@ ${box('Golden rule', 'No forecast replaces a plan: know your entry, your stop an
 <h2>Using AI well</h2>
 <p>The reports here come from a large language model given only the day's data. It summarises well but can still invent numbers: the number check and the data appendix exist for that reason. Treat AI text as a smart summary to check, never as a signal on its own.</p>` },
 
-  { id: 'moomoo', t: '12 · moomoo OpenAPI (live data from your account)', lvl: 'Setup', html: `
+  { id: 'paper', t: '13 · Paper trading', lvl: 'Practice', html: `
+<p>Paper trading means trading with virtual money at real market prices: the safest way to test a strategy or learn a new market. Each profile has its own account (default S$100,000, base currency and fee adjustable in Settings).</p>
+<h2>How orders work here</h2>
+<ul><li><b>Market</b>: fills straight away at the latest price (a live quote when available, else the last close).</li>
+<li><b>Limit buy / limit sell</b>: waits until a quote reaches your price or better.</li>
+<li><b>Stop buy / stop sell</b>: waits until price breaks through your level, then fills there. A sell stop is your stop-loss.</li>
+<li>Resting orders are checked whenever new prices arrive (about every 10 minutes, or every minute with the Worker). The server sends a push when one triggers, and it fills the next time you open the app.</li>
+<li>Bursa and SGX orders must be in board lots of 100. There's no short selling or margin: you can only sell what you hold. With Shariah-only mode on, buying status-F stocks is blocked.</li>
+<li>Prices from different markets are converted to your base currency at the latest FX rate, and a fee (default 0.1%) is charged per trade.</li></ul>
+<h2>Using it well</h2>
+<ol><li>Write the plan first (journal): setup, entry, stop, target.</li><li>Size with the position-size box on each stock page (1% risk).</li>
+<li>Trade it for at least 20–30 trades before judging. A handful of trades tells you nothing.</li><li>Review the equity curve and history on Sundays with the weekly report.</li></ol>
+<p class="note">Limits: no slippage model beyond the fill rules above, no partial fills, no dividends credited, and Bursa/SGX quotes lag about 15 minutes. Real fills will be worse; treat paper results as an upper bound.</p>` },
+
+  { id: 'zoya', t: '14 · Zoya & other Shariah checkers', lvl: 'Shariah', html: `
+<p><b>Zoya</b> (zoya.finance) is a halal-investing app that screens stocks with the <b>AAOIFI</b> methodology. For each stock it shows: (1) the business screen (what share of revenue comes from impermissible activities), (2) the financial screens (interest-bearing debt, cash and interest-bearing securities, and interest income against limits), (3) a <b>purification</b> amount per share for dividends, and (4) alerts when a stock's status changes. It covers the US in depth and a growing set of international listings. Some features need a subscription.</p>
+<h2>How to use it with this site</h2>
+<ol><li>Find candidates here (IDEA tab or screener).</li><li>On the stock page, tap <b>CHECK ON ZOYA</b> (it opens the stock directly for US tickers, or a search for others).</li>
+<li>If our status is <span class="badge st-P">P</span> (passes our ratio screen but not certified), Zoya's revenue breakdown is the missing piece: our data feed can't see non-halal income.</li>
+<li>Use Zoya's purification figure to calculate what to donate from each dividend.</li></ol>
+<h2>Which source wins?</h2>
+<table><tr><th>Market</th><th>Primary authority</th><th>Second opinion</th></tr>
+<tr><td>Malaysia (Bursa)</td><td>SC Malaysia Shariah Advisory Council list (May/Nov)</td><td>Zoya, Musaffa, HalalScreener</td></tr>
+<tr><td>US</td><td>S&amp;P 500 Shariah / Dow Jones Islamic indices (via SPUS/HLAL holdings)</td><td>Zoya, Musaffa</td></tr>
+<tr><td>Singapore</td><td>No official list. MSCI/FTSE Shariah index membership where available</td><td>Zoya, Musaffa, and our screen</td></tr></table>
+<p>Methodologies differ (30% vs 33% limits, market cap vs total assets), so a stock can pass one and fail another. Pick one standard and stay consistent; if unsure, ask a scholar you trust.</p>
+<p class="note">Note: you wrote "ZORA"; we've assumed you meant Zoya, the Shariah stock-screening app. If you meant a different service, tell us and the links will be switched.</p>` },
+
+  { id: 'hosting', t: '15 · Hosting, encryption & privacy', lvl: 'Setup', html: `
+<h2>How your data is protected</h2>
+<ul><li>The family password is turned into a 256-bit key with PBKDF2-SHA256 (310,000 rounds). Every file (market data, reports, profiles, watchlists, notes, paper trades, the sync token) is encrypted with AES-256-GCM before it leaves the GitHub server or your device. GitHub only ever stores ciphertext.</li>
+<li>The repository is public (free GitHub Pages needs that), so <b>anyone can download the encrypted files and try passwords offline</b>. The password is the only real protection. "mikachufm2202" matches the GitHub username, so it's easy to guess: switch to a long passphrase (4+ random words) with <code>local/rotate_password.py</code> (see the README).</li>
+<li>Profile PINs are a lock on the door, not a safe: anyone with the family password could read every profile. That's fine for a family; it isn't for strangers.</li>
+<li>The GitHub token is fine-grained to this one repository and stored encrypted. Revoke it on GitHub any time; the site keeps working read-only.</li>
+<li>"Remember on this device" stores the derived key in the browser. Use "Lock this device" in Settings on shared computers.</li></ul>
+<h2>GitHub Pages vs Cloudflare: is Cloudflare better?</h2>
+<table><tr><th></th><th>Now: GitHub Pages + Actions</th><th>Cloudflare Pages + Worker + KV + Access</th></tr>
+<tr><td>Cost</td><td>Free</td><td>Free tier (Workers 100k requests/day, Cron Triggers, KV)</td></tr>
+<tr><td>Privacy</td><td>Public repo; encrypted files downloadable; password is the only lock</td><td><b>Better</b>: Cloudflare Access puts a real login (one-time email codes to family emails) in front of the site and data; nothing is public</td></tr>
+<tr><td>Live prices</td><td>~10 min (GitHub's scheduler can add a few minutes)</td><td><b>Better</b>: 1-minute quotes and headlines via a Worker</td></tr>
+<tr><td>Heavy analysis (1,650 stocks, pandas, AI reports)</td><td><b>Better</b>: Actions runs full Python for free</td><td>Workers can't run pandas; you'd keep GitHub Actions for this anyway</td></tr>
+<tr><td>Saving family data</td><td>Needs a GitHub token (set once)</td><td>Worker + KV/D1 directly; no token</td></tr>
+<tr><td>Setup effort</td><td>Done</td><td>A Cloudflare account (on your approved email), deploy the Worker, optionally move Pages and add Access</td></tr></table>
+<p><b>Recommendation:</b> a hybrid. Keep GitHub for the analysis pipeline, and add the free Cloudflare Worker in <code>worker/</code> for 1-minute live prices and headlines (paste its URL and key in Settings → Family). If you want the site itself to be private rather than password-encrypted, also move the static site to Cloudflare Pages behind Cloudflare Access. That's the strongest privacy option, and worth doing before sharing beyond the family.</p>` },
+  { id: 'moomoo', t: '16 · moomoo OpenAPI (live data from your account)', lvl: 'Setup', html: `
 <p>moomoo's <b>OpenAPI</b> lets programs read quotes, your watchlists and (optionally) positions through <b>OpenD</b>, a small gateway app that runs on your own computer and logs in with your moomoo ID (your account is under aisymikhailaznan@gmail.com). A website can't talk to OpenD directly (it's on your machine, and your login must never be on a public server), so this project ships a <b>bridge script</b> that reads from OpenD and publishes an encrypted snapshot the site shows on the WL tab.</p>
 <h2>Set up (about 10 minutes, once)</h2>
 <ol><li>Download <b>OpenD</b> from moomoo's OpenAPI page (openapi.moomoo.com → Download) and log in with your moomoo ID. Turn on two-factor authentication on the account if you haven't already.</li>
-<li>In a terminal: <code>cd ~/Project_Pipeline/011_stocks-tracker</code>, then run <code>local/moomoo_bridge.py --once</code> using the project's Python (see the README).</li>
+<li>In a terminal: <code>cd ~/Project_Pipeline/011_ama-stock-screener</code>, then run <code>local/moomoo_bridge.py --once</code> using the project's Python (see the README).</li>
 <li>Your moomoo watchlist groups and live snapshot quotes appear on the WL tab, with an "Add all to watchlist" button.</li>
 <li>Optional: <code>--positions</code> also publishes your holdings (read-only; the script never unlocks trading). <code>--every 60</code> keeps it refreshing while the Mac is awake.</li></ol>
 <h2>What you get and the limits</h2>
