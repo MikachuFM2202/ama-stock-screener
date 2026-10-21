@@ -373,7 +373,7 @@ function links(r) {
   add('Yahoo Finance', `https://finance.yahoo.com/quote/${encodeURIComponent(s)}`, 'quote, financials, holders');
   add('TradingView', `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSym(s))}`, 'live chart');
   add('moomoo', `https://www.moomoo.com/stock/${encodeURIComponent(mooCode(s))}`, 'your US broker');
-  add('Google News', `https://news.google.com/search?q=${encodeURIComponent(`"${r.n}"`)}&hl=en-SG&gl=SG&ceid=SG:en`, 'latest coverage');
+  add('Yahoo Finance news', `https://finance.yahoo.com/quote/${encodeURIComponent(s)}/news`, 'latest coverage');
   if (s.endsWith('.KL')) {
     add('Bursa announcements', `https://www.bursamalaysia.com/market_information/announcements/company_announcement?company=${code}`, 'results, filings');
     add('KLSE Screener', `https://www.klsescreener.com/v2/stocks/view/${code}`, 'financials, Shariah flag');
@@ -394,13 +394,10 @@ function links(r) {
     add('SEC filings (EDGAR)', `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${s}&type=10-&dateb=&owner=include&count=40`, '10-K, 10-Q');
     add('StockAnalysis', `https://stockanalysis.com/stocks/${s.toLowerCase()}/`, 'financials, forecasts');
     add('Finviz', `https://finviz.com/quote.ashx?t=${s}`, 'snapshot, news');
-    add('Earnings call transcripts', `https://www.google.com/search?q=${encodeURIComponent(s + ' earnings call transcript')}`, 'search');
   } else if (s.includes('.')) {
     add('Musaffa', `https://musaffa.com/stock/${s}`, 'Shariah check');
   }
   if (r.web) add('Company website', r.web, 'investor relations');
-  add('Annual report (search)', `https://www.google.com/search?q=${encodeURIComponent(r.n + ' annual report pdf')}`, 'read the business');
-  add('YouTube analysis', `https://www.youtube.com/results?search_query=${encodeURIComponent(r.n + ' stock analysis')}`, 'videos');
   return `<ul class="links">${L.join('')}</ul>`;
 }
 const TV_MACRO = { '^GSPC': 'SP:SPX', '^IXIC': 'NASDAQ:IXIC', '^DJI': 'DJ:DJI', '^RUT': 'TVC:RUT', '^KLSE': 'FTSEMYX:FBMKLCI', '^STI': 'TVC:STI',
@@ -875,7 +872,7 @@ function mooHtml(m) {
     <div class="pb">${groups}${pos ? `<h3 class="amber">Positions</h3><div class="tw"><table><thead><tr><th>Ticker</th><th>Qty</th><th>Cost</th><th>Last</th><th>P/L</th></tr></thead><tbody>${pos}</tbody></table></div>` : ''}</div>`;
 }
 
-const zoyaUrl = r => !r.s.includes('.') && !/[\^=]/.test(r.s) ? `https://zoya.finance/stocks/${r.s}` : `https://www.google.com/search?q=${encodeURIComponent(`site:zoya.finance ${r.n}`)}`;
+const zoyaUrl = r => !r.s.includes('.') && !/[\^=]/.test(r.s) ? `https://zoya.finance/stocks/${r.s}` : '';  // Zoya covers US listings only
 VIEWS.stock = async (s, main) => {
   await universe();
   const r = D.bySym.get(s) || macroRow(s);
@@ -915,12 +912,13 @@ VIEWS.stock = async (s, main) => {
           ['Profit margin', pct(r.pm, 1)], ['Revenue growth', pct(r.rg, 1)], ['Dividend yield', r.dy == null ? '–' : r.dy.toFixed(2) + '%'], ['Beta', r.beta?.toFixed(2) ?? '–'],
           ['Analyst target', px(r.tgt)], ['Analyst view', `${esc(r.rec || '–')} (${r.ana ?? 0})`], ['Next earnings', r.earn ? sgt(new Date(r.earn * 1000).toISOString(), { day: 'numeric', month: 'short', year: 'numeric' }) : '–']] : [])])}</div>`)}
       ${isEq ? panel('Shariah compliance', `<div class="pb"><p>${badge(r.st)} <b>${esc(STATUS[r.st])}</b></p><ul>${(about.why || r.why || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
-        <p><a class="btn sm" href="${esc(zoyaUrl(r))}" target="_blank" rel="noopener">CHECK ON ZOYA ↗</a> <a class="btn sm ghost" href="https://musaffa.com/stock/${encodeURIComponent(r.s.split('.')[0])}" target="_blank" rel="noopener">MUSAFFA ↗</a>${r.m === 'MY' ? ' <a class="btn sm ghost" href="https://www.sc.com.my/development/icm/icm-publications/list-of-shariah-compliant-securities" target="_blank" rel="noopener">SC LIST ↗</a>' : ''}</p>
+        <p>${zoyaUrl(r) ? `<a class="btn sm" href="${esc(zoyaUrl(r))}" target="_blank" rel="noopener">CHECK ON ZOYA ↗</a> ` : ''}<a class="btn sm ghost" href="https://musaffa.com/stock/${encodeURIComponent(r.s.split('.')[0])}" target="_blank" rel="noopener">MUSAFFA ↗</a>${r.m === 'MY' ? ' <a class="btn sm ghost" href="https://www.sc.com.my/development/icm/icm-publications/list-of-shariah-compliant-securities" target="_blank" rel="noopener">SC LIST ↗</a>' : ''}</p>
         <p class="note">Zoya (AAOIFI methodology) shows the business screen, the debt/cash/interest-income ratios and a per-share purification amount for dividends. ${r.m === 'MY' ? 'For Bursa stocks the SC Malaysia list is the official word; Zoya is a second opinion.' : ''} Our ratios: debt/market cap ${pctp(r.dm)} · cash/market cap ${pctp(r.cm)}. See Learn → Shariah investing and Zoya.</p></div>`) : ''}
       ${about.about ? panel('What the company does', `<div class="pb">${esc(about.about)}${about.about.length >= 690 ? '…' : ''}</div>`) : ''}
       ${panel('Research links', `<div class="pb">${links(r)}</div>`)}
       ${panel('Latest news', `<ul class="list">${news.map(n => `<li><a href="${esc(safe(n.u))}" target="_blank" rel="noopener">${esc(n.t)}</a><br><small>${esc(n.s || '')} · ${esc(n.at ? ago(n.at) : '')}</small></li>`).join('')
-        || `<li>No saved headlines (only watchlist names get them). <a href="https://news.google.com/search?q=${encodeURIComponent(`"${r.n}"`)}&hl=en-SG&gl=SG&ceid=SG:en" target="_blank" rel="noopener">Search Google News</a></li>`}</ul>`)}
+        || `<li>No saved headlines (only watchlist names get them). <a href="https://finance.yahoo.com/quote/${encodeURIComponent(r.s)}/news" target="_blank" rel="noopener">Yahoo Finance news for ${esc(r.s)}</a></li>`}</ul>`)}
+      ${(D.summary.media?.wl?.[r.s] || []).length ? panel('Videos on this stock', `<ul class="list">${D.summary.media.wl[r.s].map(v => `<li><a href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener">▶ ${esc(v.t)}</a><br><small>${esc(v.src)}</small></li>`).join('')}</ul>`) : ''}
     </div>`;
   let nt;
   $('#note').oninput = e => {
@@ -1204,7 +1202,7 @@ VIEWS.media = async (_, main) => {
       <button class="btn sm ghost" data-unlater="${esc(x.id)}" aria-label="Remove">✕</button></li>`).join('') || '<li class="muted">Tap “＋ Watch later” on any video or episode below.</li>'}</ul>`, '', 'span')}
     ${panel('Start here · the video you shared', `<div class="embed"><iframe src="https://www.youtube-nocookie.com/embed/${FEATURED}" title="StockedUp: The Stock Market Is Being Manipulated…" allow="encrypted-media; picture-in-picture" allowfullscreen loading="lazy"></iframe></div>
       <p class="pb note">StockedUp · "The Stock Market Is Being Manipulated…". Watch critically: what evidence is shown, and what would prove it wrong? ${laterBtn('yt:' + FEATURED, 'The Stock Market Is Being Manipulated…', 'StockedUp', `https://www.youtube.com/watch?v=${FEATURED}`)}</p>`)}
-    ${panel('Study plan · what to watch next', `<div class="pb">${RESOURCES.study.map(([t, q, why]) => `<p><a href="https://www.youtube.com/results?search_query=${encodeURIComponent(q)}" target="_blank" rel="noopener">▶ ${esc(t)}</a><br><span class="note">${esc(why)}</span></p>`).join('')}</div>`)}
+    ${panel('Study plan · what to watch next', `<div class="pb">${(M.study || []).map(v => `<p><b class="amber">${esc(v.topic)}</b><br><a href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener">▶ ${esc(v.t)}</a> <small>${esc(v.src)}</small> ${laterBtn('yt:' + v.id, v.t, v.src, `https://www.youtube.com/watch?v=${v.id}`)}<br><span class="note">${esc(v.why)}</span></p>`).join('') || '<p class="muted">Study videos arrive with the next market update.</p>'}</div>`)}
     ${panel('Latest from market channels', `<div class="pb vids">${vids.slice(0, 36).map(v => `<div class="vid-wrap"><a class="vid" href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener"><img loading="lazy" alt="" src="https://i.ytimg.com/vi/${esc(v.id)}/mqdefault.jpg"><div>${esc(v.t)}<small>${esc(v.src)} · ${v.at ? esc(ago(v.at)) : ''}</small></div></a>${laterBtn('yt:' + v.id, v.t, v.src, `https://www.youtube.com/watch?v=${v.id}`)}</div>`).join('') || '<p class="muted">Video feeds were unavailable at the last update.</p>'}</div>`, '', 'span')}
     ${panel('Latest podcast episodes', `<ul class="list">${M.pods.map(p => `<li><b class="amber">${esc(p.src)}</b><br><a href="${esc(safe(p.u))}" target="_blank" rel="noopener">${esc(p.t)}</a> <small>${p.at ? esc(ago(p.at)) : ''}</small> ${laterBtn('pod:' + (p.u || p.t), p.t, p.src, p.u || '#')}</li>`).join('')}</ul>`)}
     ${panel('Channels & shows to follow', `<div class="pb">${RESOURCES.channels.map(([t, u, d]) => `<p><a href="${esc(safe(u))}" target="_blank" rel="noopener">${esc(t)}</a> <span class="note">${esc(d)}</span></p>`).join('')}</div>`)}

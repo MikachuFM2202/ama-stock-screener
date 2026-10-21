@@ -57,4 +57,7 @@ import json as _j, tempfile as _t
 os.environ['PUSH_OUT'] = _t.mktemp()
 b.write_push([{'subs': [{'endpoint': 'a'}, {'endpoint': 'b', 'del': True}], 'msgs': [{'title': 't'}]}])
 assert [s['endpoint'] for s in _j.load(open(os.environ['PUSH_OUT']))['jobs'][0]['subs']] == ['a']
+# news/video relevance: market stories stay, sport/showbiz/crime/shorts go
+assert all(b.relevant(t) for t in ['Fed holds rates, stocks rally', 'Oil jumps as OPEC cuts output', 'How to Trade Breakouts'])
+assert not any(b.relevant(t) for t in ['Malaysia wins badminton gold', 'Actress stuns at gala', 'Man stabbed in Woodlands', 'Quit my job #shorts', 'Best hawker food in Penang'])
 print('ok')

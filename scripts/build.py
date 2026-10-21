@@ -389,6 +389,27 @@ NEWS_Q = [('Global', 'stock market today'), ('US', 'Wall Street stocks Fed'), ('
           ('Islamic finance', 'shariah compliant stocks OR islamic finance'), ('Asia', 'Asian markets stocks')]
 
 
+# Headlines/videos must be about markets or something that moves them; JUNK drops sport, showbiz, crime and lifestyle.
+RELEVANT = re.compile(
+    r'\b(stocks?|shares?|equit\w*|markets?|econom\w*|inflation|deflation|interest|rates?|central bank|fed|fomc|powell|ecb|boj|mas|bank negara|bnm|opr|'
+    r'earnings|profits?|revenue|results|quarter\w*|guidance|ipos?|listing|bonds?|yields?|treasur\w*|sukuk|dollar|ringgit|sgd|yen|yuan|currenc\w*|forex|fx|'
+    r'oil|crude|opec|gold|silver|copper|commodit\w*|palm oil|gdp|recession|tariffs?|trade|trading|trader|exports?|imports?|sanctions?|bursa|sgx|sti|klci|'
+    r'wall street|nasdaq|s&p|dow|investors?|invest\w*|funds?|etfs?|dividends?|mergers?|acquisitions?|takeover|deal|bankrupt\w*|default|debt|budget|tax\w*|'
+    r'jobs|payrolls?|unemployment|cpi|pmi|retail sales|housing|property|reits?|crypto\w*|bitcoin|ethereum|ai|chips?|semiconductor\w*|nvidia|apple|tesla|'
+    r'microsoft|amazon|alphabet|google|meta|banks?|prices?|sales|valuation|billion|million|ceo|compan\w*|firms?|layoffs?|shutdown|election|war|ceasefire|'
+    r'portfolio|wealth|money|financ\w*|halal|zakat|riba|shariah|islamic|candlestick|chart|technical analysis|price action|risk|volatility|vix|'
+    r'bull\w*|bear\w*|rally|selloff|sell-off|crash|correction|options|futures|hedge|capital|growth|startups?|industr\w*|manufactur\w*|supply|demand)\b', re.I)
+JUNK = re.compile(
+    r'\b(medal|olympic|league|tournament|championship|world cup|fifa|match|goal|striker|badminton|football|soccer|cricket|tennis|golf|f1|formula 1|nba|nfl|'
+    r'celebrity|actor|actress|singer|concert|movie|film|drama series|k-?pop|album|recipe|horoscope|zodiac|wedding|dating|fashion|beauty|makeup|skincare|'
+    r'murder\w*|stabb\w*|rape|molest\w*|kidnap\w*|missing child|lottery|toto|giveaway|prank|reaction|vlog|unboxing|mukbang|food review|travel guide|'
+    r'event highlights?|behind the scenes)\b|#shorts', re.I)
+
+
+def relevant(t, need_market=True):
+    return bool(t) and not JUNK.search(t) and (not need_market or bool(RELEVANT.search(t)))
+
+
 def gnews(q, n=8, days=1, when=None):
     r = http(f'https://news.google.com/rss/search?q={requests.utils.quote(q)}+when:{when or f"{days}d"}&hl=en-SG&gl=SG&ceid=SG:en')
     f = feedparser.parse(r.content if r else b'')
@@ -401,13 +422,29 @@ def gnews(q, n=8, days=1, when=None):
     return out
 
 
+def yt_search(q, must=None, n=1):
+    """Direct videos for a topic (YouTube's search page, videos only), checked via oEmbed so every link is a real, public video.
+    `must`: a word the title or channel has to contain (keeps company searches on the company)."""
+    r = http('https://www.youtube.com/results', tries=2, params={'search_query': q, 'sp': 'EgIQAQ=='}, cookies={'CONSENT': 'YES+1'})
+    out = []
+    for vid in list(dict.fromkeys(re.findall(r'"videoId":"([\w-]{11})"', r.text if r else '')))[:6]:
+        o = http('https://www.youtube.com/oembed', tries=1, params={'url': f'https://www.youtube.com/watch?v={vid}', 'format': 'json'})
+        if not o: continue
+        j = o.json()
+        t, ch = j.get('title', ''), j.get('author_name', '')
+        if not relevant(t, need_market=False) or (must and must.lower() not in (t + ' ' + ch).lower()): continue
+        out.append({'id': vid, 't': t, 'src': ch})
+        if len(out) >= n: break
+    return out
+
+
 def news(watch):
     out = []
     for tag, q in NEWS_Q:
-        try: out += [dict(x, g=tag) for x in gnews(q)]
+        try: out += [dict(x, g=tag) for x in gnews(q, 12) if relevant(x['t'])]
         except Exception as e: print('news', tag, e)
     for w in watch[:25]:
-        try: out += [dict(x, g='Watchlist', sym=w['s']) for x in gnews(f'"{w["n"]}"', 3, 3)]
+        try: out += [dict(x, g='Watchlist', sym=w['s']) for x in gnews(f'"{w["n"]}"', 6, 3) if relevant(x['t'], need_market=False)][:3]
         except Exception: pass
     seen, uniq = set(), []
     for x in out:
@@ -445,22 +482,52 @@ CHANNELS = [('Rayner Teo (SG trader, price action)', 'UCES1CX-L4242aZELJyz-6QA')
             ('Zoya', 'UCwUNl-kaRvUbFhvJxAOI-dA')]
 
 
-def media(old):
+# Study plan (Watch tab): each topic resolves to one direct video, refreshed weekly.
+STUDY = [('Candlestick basics (Rayner Teo)', 'Rayner Teo candlestick patterns trading guide', 'A Singapore-based trader with clear price-action lessons. Start here for the EDU candles chapter.'),
+         ('Support and resistance properly', 'Rayner Teo support and resistance', 'The single most useful chart skill.'),
+         ('Position sizing and risk', 'position sizing explained trading risk management 1 percent rule', 'Stops and sizing matter more than entries.'),
+         ('How to read an annual report', 'how to read an annual report for beginners investing', 'Fundamental basics.'),
+         ('Valuation (Damodaran)', 'Aswath Damodaran valuation class intrinsic value', 'The best free valuation teaching anywhere.'),
+         ('Shariah stock screening explained', 'Islamic Finance Guru how to check if a stock is halal', 'How screens work and their limits.'),
+         ('Purifying dividends', 'how to purify dividends halal investing', 'The practical step most people skip.'),
+         ('Is day trading halal?', 'is day trading halal scholars', 'Hear the scholarly views directly.'),
+         ('Reading the economic calendar', 'how CPI and FOMC affect stock market explained', 'Why stocks jump on data days.'),
+         ('Bursa Malaysia for beginners', 'how to invest in Bursa Malaysia beginners', 'Local market mechanics.'),
+         ('US estate tax for Singapore investors', 'US estate tax Singapore investors Ireland domiciled ETF', 'An overlooked risk for Asia-based investors.'),
+         ('VWAP and opening range (intraday)', 'VWAP opening range breakout strategy explained', 'If you do day trade, learn these first.')]
+
+
+def media(old, watch=()):
+    old = old or {}
     pods, vids = [], []
     for name, url in PODCASTS:
         r = http(url)
         if not r: continue
         f = feedparser.parse(r.content)
-        for e in f.entries[:3]:
+        for e in [e for e in f.entries[:8] if relevant(e.get('title'))][:3]:
             pods.append({'src': name, 't': e.get('title'), 'u': e.get('link') or (e.get('enclosures') or [{}])[0].get('href'), 'at': e.get('published')})
     for name, cid in CHANNELS:
         r = http(f'https://www.youtube.com/feeds/videos.xml?channel_id={cid}', tries=2)
         if not r:  # YouTube's feed 404s intermittently; keep yesterday's entries for this channel
-            vids += [v for v in (old or {}).get('vids', []) if v.get('src') == name]
+            vids += [v for v in old.get('vids', []) if v.get('src') == name and relevant(v.get('t'))]
             continue
-        for e in feedparser.parse(r.content).entries[:4]:
+        fresh = lambda e: (e.get('published') or '')[:10] >= (NOW - dt.timedelta(days=180)).date().isoformat()  # dormant channels: skip old uploads
+        for e in [e for e in feedparser.parse(r.content).entries[:10] if e.get('yt_videoid') and fresh(e) and relevant(e.get('title'))][:4]:
             vids.append({'src': name, 't': e.get('title'), 'id': e.get('yt_videoid'), 'at': e.get('published')})
-    return {'pods': pods, 'vids': vids}
+    study = old.get('study') or []
+    if MODE == 'weekly' or len(study) < len(STUDY) // 2:
+        got = []
+        for t, q, why in STUDY:
+            v = yt_search(q)
+            if v: got.append({**v[0], 'topic': t, 'why': why})
+        if len(got) >= len(study): study = got
+    # Watchlist names: one or two recent videos that actually mention the company (no search pages on the site).
+    wl = {}
+    for w in watch[:25]:
+        first = re.sub(r'[^\w ]', '', w['n']).split(' ')[0] if w.get('n') and w['n'] != w['s'] else w['s'].split('.')[0]
+        try: wl[w['s']] = yt_search(f'{w["n"]} stock', must=first, n=2)
+        except Exception as e: print('yt', w['s'], e)
+    return {'pods': pods, 'vids': vids, 'study': study, 'wl': {k: v for k, v in wl.items() if v}}
 
 
 # ---------------------------------------------------------------- small-account strategies (scan + backtest)
@@ -918,7 +985,7 @@ def main():
                'cal': {g: {str(h): t for h, t in c.items()} for g, c in cal.items()},
                'sc': {k: sc.get(k) for k in ('asof', 'url', 'patched')}, 'counts': count(rows),
                'calendar': calendar(), 'earnings': earnings, 'news': news([by[w['s']] for w in wl if w['s'] in by] + [{'s': w['s'], 'n': w['s']} for w in wl if w['s'] not in by]),
-               'media': media(old.get('media')), 'reports': old.get('reports', []), 'fx': fx}
+               'media': media(old.get('media'), [{'s': w['s'], 'n': by[w['s']]['n'] if w['s'] in by else w['s']} for w in wl]), 'reports': old.get('reports', []), 'fx': fx}
 
     # Small-account strategies: compliant, liquid stocks plus the US-listed Shariah ETFs.
     meta = {r['s']: {'m': r['m'], 'st': r['st'], 'cur': r['cur'], 'n': r['n'], 'val': r.get('valusd')} for r in rows
@@ -1054,13 +1121,12 @@ def breaking():
     seen, out = set(), []
     for x in sorted(items, key=lambda x: _ts(x.get('at')), reverse=True):
         if sum(ord(c) > 0x24F for c in x['t']) > len(x['t']) * .3: continue  # English feed, but Google mixes in other scripts
-        if SPORT.search(x['t']): continue
+        if not relevant(x['t']): continue
         k = x['t'].lower()[:70]
         if k not in seen: seen.add(k); out.append(x)
     return out  # at most 8 per outlet, so a busy outlet can't crowd out a slow one
 
 
-SPORT = re.compile(r'\b(medal|games|cup|league|tournament|championship|olympic|match|goal|striker|badminton|football|cricket|F1)\b', re.I)
 
 
 def _ts(s):
