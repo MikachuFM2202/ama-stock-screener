@@ -210,6 +210,19 @@ def screen(exchange, mcap, n):
     return rows
 
 
+def fix_suffixes(uni):
+    """SP Funds lists Taipei OTC (TPEx) and KOSDAQ names with the main-board suffix; Yahoo has them as .TWO / .KQ."""
+    alt = lambda s: s + 'O' if s.endswith('.TW') else s[:-3] + '.KQ'
+    cand = [s for s in uni if s.endswith(('.TW', '.KS'))]
+    if len(cand) < 2: return uni
+    try: d = yf.download(cand + [alt(s) for s in cand], period='1mo', progress=False, auto_adjust=True, group_by='column')['Close']
+    except Exception as e: print('suffix check', e); return uni
+    ok = lambda s: s in d and d[s].notna().any()
+    for s in cand:
+        if not ok(s) and ok(alt(s)): uni[alt(s)] = uni.pop(s)
+    return uni
+
+
 def build_universe():
     sc = sc_list()
     spf = sp_funds()
@@ -933,6 +946,8 @@ def main():
     if MODE == 'weekly' or not uni or not any(u.get('sn') for u in uni.values()):  # sn added 2026-10-22
         uni, sc = build_universe()
         cache_put('universe-v2.json', uni)
+    if any(s.endswith(('.TW', '.KS')) for s in uni):
+        uni = fix_suffixes(uni); cache_put('universe-v2.json', uni)
     print('universe', len(uni))
 
     fund = cache_get('fund.json', {})
@@ -957,6 +972,8 @@ def main():
     I = indicators(P)
     have = [s for s in I['C'].columns if I['C'][s].notna().sum() > 30]
     fx = {c: float(I['C'][f'{c}=X'].dropna().iloc[-1]) for c in curr | {'SGD', 'MYR'} if f'{c}=X' in have}
+    lost = [c for c in curr if c.isalpha() and len(c) == 3 and c not in fx]  # the bulk download drops some FX pairs under load
+    if lost: fx.update({s[:-2]: v['p'] for s, v in quotes([f'{c}=X' for c in lost]).items()})
     fx['USD'] = 1.0
     if 'GBP' in fx: fx['GBp'] = fx['GBP'] * 100
 

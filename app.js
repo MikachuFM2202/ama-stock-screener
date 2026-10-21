@@ -154,7 +154,7 @@ async function loadMe(id) {
   if (!ME) return;
   store.set('me', id);
   ST = mergeState(blank(), store.get(`st:${id}`, null));
-  try { const remote = await readData(`p/${id}.bin`); if (remote) ST = mergeState(ST, remote); } catch {}
+  if (id !== GUEST.id) try { const remote = await readData(`p/${id}.bin`); if (remote) ST = mergeState(ST, remote); } catch {}  // Guest lives on the device only
   ST.paper ||= PT.newAccount();
   store.set(`st:${id}`, ST);
   paintMe();
@@ -290,7 +290,7 @@ function quoteOf(s) {
   const px = q?.p ?? r?.px;
   return px ? { px, h: q?.h, l: q?.l, d: q?.d || r?.d, cur: r?.cur || curOf(s), st: r?.st, n: r?.n || s } : null;
 }
-const curOf = s => ({ KL: 'MYR', SI: 'SGD', T: 'JPY', HK: 'HKD', L: 'GBp', TO: 'CAD', AX: 'AUD', KS: 'KRW', TW: 'TWD', SS: 'CNY', SZ: 'CNY', JK: 'IDR', SW: 'CHF', AS: 'EUR' })[s.split('.')[1]] || 'USD';
+const curOf = s => ({ KL: 'MYR', SI: 'SGD', T: 'JPY', HK: 'HKD', L: 'GBp', TO: 'CAD', AX: 'AUD', KS: 'KRW', KQ: 'KRW', TW: 'TWD', TWO: 'TWD', SS: 'CNY', SZ: 'CNY', JK: 'IDR', SW: 'CHF', AS: 'EUR' })[s.split('.')[1]] || 'USD';
 function paintTicker() {
   const el = $('#ticker'), tr = $('#tickerTrack');
   el.hidden = !P().ticker;
@@ -408,7 +408,7 @@ const TV_MACRO = { '^GSPC': 'SP:SPX', '^IXIC': 'NASDAQ:IXIC', '^DJI': 'DJ:DJI', 
   'CL=F': 'NYMEX:CL1!', 'BZ=F': 'ICEEUR:BRN1!', 'NG=F': 'NYMEX:NG1!', 'ZW=F': 'CBOT:ZW1!', 'ZC=F': 'CBOT:ZC1!', 'ZS=F': 'CBOT:ZS1!',
   'SGD=X': 'FX_IDC:USDSGD', 'MYR=X': 'FX_IDC:USDMYR', 'SGDMYR=X': 'FX_IDC:SGDMYR', 'DX-Y.NYB': 'TVC:DXY', 'JPY=X': 'FX:USDJPY',
   'CNY=X': 'FX_IDC:USDCNY', '^TNX': 'TVC:US10Y', '^IRX': 'TVC:US03MY', '^FVX': 'TVC:US05Y', '^TYX': 'TVC:US30Y', '^VIX': 'TVC:VIX', 'ISWD.L': 'LSE:ISWD', 'ISDU.L': 'LSE:ISDU' };
-const TV_EX = { KL: 'MYX', SI: 'SGX', T: 'TSE', HK: 'HKEX', KS: 'KRX', TW: 'TWSE', AX: 'ASX', L: 'LSE', TO: 'TSX', SW: 'SIX', AS: 'EURONEXT', SS: 'SSE', SZ: 'SZSE', JK: 'IDX', HE: 'OMXHEX', MC: 'BME', MI: 'MIL', CO: 'OMXCOP' };
+const TV_EX = { KL: 'MYX', SI: 'SGX', T: 'TSE', HK: 'HKEX', KS: 'KRX', TW: 'TWSE', TWO: 'TPEX', KQ: 'KRX', AX: 'ASX', L: 'LSE', TO: 'TSX', SW: 'SIX', AS: 'EURONEXT', SS: 'SSE', SZ: 'SZSE', JK: 'IDX', HE: 'OMXHEX', MC: 'BME', MI: 'MIL', CO: 'OMXCOP' };
 function tvSym(s) {
   if (TV_MACRO[s]) return TV_MACRO[s];
   if (s.endsWith('-USD')) return `CRYPTO:${s.slice(0, -4)}USD`;
@@ -490,8 +490,11 @@ async function autoKick() {
   const runs = store.get('autoRun', {}), t = Date.now();
   const kick = async (kind, body) => { runs[kind] = t; store.set('autoRun', runs); try { await gh('dispatches', { method: 'POST', body: JSON.stringify(body) }); } catch {} };
   if (!CFG.worker?.url && (!LIVE || t - Date.parse(LIVE.at) > 20 * 60000) && t - (runs.live || 0) > 15 * 60000) await kick('live', { event_type: 'refresh' });
-  if (t - Date.parse(D.summary.at) > 16 * 3600000 && t - (runs.market || 0) > 3 * 3600000) {
-    const { wd, m } = zoned('Asia/Singapore');
+  // Market age is measured against the live job's server time when it is recent, so a device whose clock runs fast
+  // doesn't start ~30-minute rebuilds; and nothing new happens between Saturday's run and Sunday's weekly one.
+  const { wd, m } = zoned('Asia/Singapore'), weekend = (wd === 'Sat' && m >= 7 * 60) || (wd === 'Sun' && m < 17.5 * 60);
+  const ref = LIVE && Math.abs(t - Date.parse(LIVE.at)) < 3600000 ? t : LIVE ? Date.parse(LIVE.at) : t;
+  if (!weekend && ref - Date.parse(D.summary.at) > 16 * 3600000 && t - (runs.market || 0) > 3 * 3600000) {
     const mode = wd === 'Sun' && m >= 17 * 60 ? 'weekly' : wd !== 'Sun' && m < 12 * 60 ? 'daily' : 'evening';
     await kick('market', { event_type: 'snapshot', client_payload: { mode } });
   }
@@ -570,7 +573,7 @@ function findStocks(q, max = 12) {
 }
 const symOf = v => { v = (v || '').trim(); return v ? findStocks(v, 1)[0]?.s || v.toUpperCase() : ''; };
 const mkOf = s => s.startsWith('^') ? 'Index' : s.endsWith('=F') ? 'Futures' : s.endsWith('=X') ? 'FX' : s.endsWith('-USD') ? 'Crypto'
-  : ({ KL: 'MY', SI: 'SG', T: 'JP', HK: 'HK', SS: 'CN', SZ: 'CN', TW: 'TW', KS: 'KR', AX: 'AU', TO: 'CA', L: 'UK', JK: 'ID' })[s.split('.')[1]] || (s.includes('.') ? s.split('.').pop() : 'US');
+  : ({ KL: 'MY', SI: 'SG', T: 'JP', HK: 'HK', SS: 'CN', SZ: 'CN', TW: 'TW', TWO: 'TW', KS: 'KR', KQ: 'KR', AX: 'AU', TO: 'CA', L: 'UK', JK: 'ID' })[s.split('.')[1]] || (s.includes('.') ? s.split('.').pop() : 'US');
 // One dropdown serves every input marked data-suggest (header search, watchlist, paper ticket, journal).
 const SG = { box: null, input: null, items: [], i: -1 };
 function suggestInit() {
@@ -700,8 +703,8 @@ const REGIONS = [
   ['US', 'United States', 'US', null, ['^GSPC', '^IXIC', '^DJI', '^NDX', '^RUT', '^SOX']],
   ['HK', 'Hong Kong & China', 'GL', ['HK', 'SS', 'SZ'], ['^HSI', '000001.SS', '^HSCE', '399001.SZ']],
   ['JP', 'Japan', 'GL', ['T'], ['^N225']],
-  ['TW', 'Taiwan', 'GL', ['TW'], ['^TWII']],
-  ['KR', 'Korea', 'GL', ['KS'], ['^KS11']],
+  ['TW', 'Taiwan', 'GL', ['TW', 'TWO'], ['^TWII']],
+  ['KR', 'Korea', 'GL', ['KS', 'KQ'], ['^KS11']],
   ['AU', 'Australia', 'GL', ['AX'], ['^AXJO']],
   ['CA', 'Canada', 'GL', ['TO'], ['^GSPTSE']],
   ['EU', 'Europe', 'GL', ['L', 'SW', 'AS', 'MI', 'HE', 'CO', 'MC'], ['^STOXX50E', '^FTSE', '^GDAXI', '^FCHI']],
@@ -1390,12 +1393,12 @@ VIEWS.paper = async (arg, main) => {
     const s = symOf($('#tkS').value), q = quoteOf(s), qty = +$('#tkQ').value || 0;
     const p = T.type === 'market' ? q?.px : +$('#tkPx').value;
     const cost = q && p ? PT.convert(qty * p, q.cur, B, fx) : null;
-    $('#tkInfo').innerHTML = q ? `${esc(q.n)} ${badge(q.st)} · last ${px(q.px)} ${esc(q.cur)} · board lot ${PT.LOT(s)} · est. ${cost == null ? '–' : m(cost)} + fee` : (s ? 'Unknown ticker: pick one from the list.' : '');
+    $('#tkInfo').innerHTML = q ? `<b>${esc(s)}</b> ${esc(q.n)} ${badge(q.st)} · last ${px(q.px)} ${esc(q.cur)} · board lot ${PT.LOT(s)} · est. ${cost == null ? '–' : m(cost)} + fee` : (s ? 'Unknown ticker: pick one from the list.' : '');
     $('#tkErr').textContent = '';
   };
   $$('#tk [data-side]').forEach(b => b.onclick = () => { T.side = b.dataset.side; $$('#tk [data-side]').forEach(x => x.className = x === b ? `on ${T.side}` : ''); info(); });
   $$('#tk [data-type]').forEach(b => b.onclick = () => { T.type = b.dataset.type; $$('#tk [data-type]').forEach(x => x.className = x === b ? 'on t' : ''); $('#tkPxL').hidden = T.type === 'market'; info(); });
-  ['tkS', 'tkQ', 'tkPx'].forEach(id => $(`#${id}`).oninput = info); info();
+  ['tkS', 'tkQ', 'tkPx'].forEach(id => $(`#${id}`).oninput = info); $('#tkS').onchange = info; info();  // change = picked from the suggestions
   $('#tk').onsubmit = e => {
     e.preventDefault();
     const s = symOf($('#tkS').value), q = quoteOf(s);
@@ -1415,6 +1418,7 @@ VIEWS.paper = async (arg, main) => {
   // family leaderboard: everyone's paper return, read-only
   const rows = [];
   for (const p of people()) {
+    if (p.id === GUEST.id && !isGuest()) continue;  // Guest's trades aren't synced
     const st = p.id === ME.id ? ST : await boardState(p.id);
     if (!st?.paper) continue;
     const v = PT.value(st.paper, s => quoteOf(s), fx);
