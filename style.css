@@ -225,3 +225,16 @@ dl.gl dt { font: 600 13px var(--mono); color: var(--amber2); }
   th:first-child { background: var(--panel2); z-index: 2; }
 }
 @media (max-width: 760px) { html { scroll-padding-top: calc(var(--top-h, 52px) + 40px); scroll-padding-bottom: 80px; } }
+
+/* breaking-news pop-ups */
+.pops { position: fixed; z-index: 45; top: calc(var(--top-h, 52px) + 8px); right: var(--gut); width: min(380px, calc(100% - 2 * var(--gut))); display: grid; gap: 8px; pointer-events: none; }
+.pop { pointer-events: auto; display: grid; grid-template-columns: 1fr auto; background: #0d0900; border: 1px solid var(--amber); border-left: 4px solid var(--down); box-shadow: 0 6px 24px #000c; animation: popIn .25s ease-out; }
+.pop a { display: grid; gap: 3px; padding: 10px 12px; color: var(--text); text-decoration: none; }
+.pop a b { color: var(--amber); font-size: 11px; letter-spacing: .06em; }
+.pop a span { font-size: 14px; line-height: 1.35; }
+.pop a small { color: var(--dim); font-size: 11px; }
+.pop button { background: none; border: 0; color: var(--muted); padding: 8px 10px; cursor: pointer; align-self: start; font-size: 14px; }
+@keyframes popIn { from { transform: translateY(-8px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .pop { animation: none; } }
+
+.form label.toggle { display: flex; flex-direction: row; align-items: center; gap: 10px; color: var(--text); font-size: 14px; }

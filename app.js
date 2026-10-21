@@ -100,14 +100,21 @@ async function saveVault(next) {
 
 // ---------------------------------------------------------------- profiles
 const COLORS = ['#ffa028', '#2bd96b', '#5fb4ff', '#c38cff', '#ff6b9d', '#3fd0d0', '#ffe14d', '#ff4d4d'];
+// Breaking-news outlets the family chose (2026-10-21); ids match NEWS_SOURCES in scripts/build.py.
+const NEWS_SOURCES = [['reuters', 'Reuters', 'reuters.com'], ['bloomberg', 'Bloomberg', 'bloomberg.com'], ['cnbc', 'CNBC', 'cnbc.com'], ['bbc', 'BBC News', 'bbc.com'],
+  ['aljazeera', 'Al Jazeera', 'aljazeera.com'], ['ft', 'Financial Times', 'ft.com'], ['wsj', 'Wall Street Journal', 'wsj.com'], ['yahoo', 'Yahoo Finance', 'finance.yahoo.com'],
+  ['cna', 'CNA', 'channelnewsasia.com'], ['st', 'The Straits Times', 'straitstimes.com'], ['bt', 'The Business Times', 'businesstimes.com.sg'],
+  ['bernama', 'Bernama', 'bernama.com'], ['edge', 'The Edge Malaysia', 'theedgemalaysia.com'], ['star', 'The Star', 'thestar.com.my']];
 const DEF_PREFS = { home: 'mkt', mkt: 'US', risk: 1.5, acct: 1500, move: 5, ticker: true, shariahOnly: true,
+  news: { popup: true, sources: NEWS_SOURCES.map(x => x[0]) },
   notify: { daily: true, weekly: true, alerts: true, moves: true, orders: true, breaking: false } };
 const now = () => new Date().toISOString();
 const blank = () => ({ v: 2, at: 0, wl: [], notes: {}, journal: [], later: [], quick: [], subs: [], prefs: structuredClone(DEF_PREFS), paper: PT.newAccount() });
 let FAMILY = store.get('family', { list: [], at: 0 });
 let ME = null, ST = blank();
 const people = () => FAMILY.list.filter(p => !p.del);
-const P = () => ({ ...DEF_PREFS, ...ST.prefs, notify: { ...DEF_PREFS.notify, ...(ST.prefs?.notify || {}) } });
+const P = () => ({ ...DEF_PREFS, ...ST.prefs, notify: { ...DEF_PREFS.notify, ...(ST.prefs?.notify || {}) }, news: { ...DEF_PREFS.news, ...(ST.prefs?.news || {}) } });
+const myNews = list => { const mine = new Set(P().news.sources); return (list || []).filter(n => !n.src || mine.has(n.src)); };
 
 async function loadFamily() {
   try { const f = await readData('profiles.bin'); if (f) FAMILY = { ...f, list: PT.mergeList(FAMILY.list, f.list) }; } catch {}
@@ -199,7 +206,7 @@ function pickProfile(msg = '') {
       if (pin == null) return;
       if (await sha(p.pin.salt + pin) !== p.pin.h) return pickProfile('Wrong PIN.');
     }
-    el.hidden = true; await loadMe(p.id); route();
+    el.hidden = true; await loadMe(p.id); route(); popNews();
   });
   $('#pBack')?.addEventListener('click', () => { el.hidden = true; });
   $('#addP').onsubmit = async e => {
@@ -247,16 +254,18 @@ async function loadLive() {
       const u = CFG.worker.url.replace(/\/$/, ''), k = encodeURIComponent(CFG.worker.key || '');
       const syms = liveSyms().slice(0, 180), chunks = [];
       for (let i = 0; i < syms.length; i += 45) chunks.push(syms.slice(i, i + 45));  // free Workers allow 50 subrequests per call
-      const [qs, n] = await Promise.all([Promise.all(chunks.map(c => fetch(`${u}/q?k=${k}&s=${encodeURIComponent(c.join(','))}`).then(r => r.json()))), fetch(`${u}/news?k=${k}`).then(r => r.json())]);
+      const [qs, n] = await Promise.all([Promise.all(chunks.map(c => fetch(`${u}/q?k=${k}&s=${encodeURIComponent(c.join(','))}`).then(r => r.json()))), fetch(`${u}/news?k=${k}&d=${encodeURIComponent(NEWS_SOURCES.filter(x => P().news.sources.includes(x[0])).map(x => x[2]).join(','))}`).then(r => r.json())]);
       const q = { at: qs[0]?.at || new Date().toISOString(), q: Object.assign({}, ...qs.map(x => x.q || {})) };
       const fx = {}; for (const [s, v] of Object.entries(q.q || {})) if (s.endsWith('=X')) fx[s.slice(0, -2)] = v.p;
-      data = { at: q.at, q: q.q, fx, news: n.news || [] }; liveFrom = 'worker';
+      const byDom = Object.fromEntries(NEWS_SOURCES.map(x => [x[2], x]));
+      data = { at: q.at, q: q.q, fx, news: (n.news || []).map(x => byDom[x.dom] ? { ...x, src: byDom[x.dom][0], s: byDom[x.dom][1] } : x) }; liveFrom = 'worker';
     } catch (e) { console.warn('worker', e); }
   }
   if (!data) { try { data = await readBranch('live', 'live.bin'); liveFrom = 'github'; } catch {} }
   if (!data) return false;
   const changed = !LIVE || data.at !== LIVE.at;
   LIVE = data; applyLive(); paintTicker(); tick();
+  popNews();
   return changed;
 }
 function applyLive() {
@@ -280,11 +289,38 @@ function paintTicker() {
   if (el.hidden) return;
   const marks = ['^GSPC', '^IXIC', '^KLSE', '^STI', 'GC=F', 'CL=F', 'SGD=X'].map(macroRow).filter(Boolean)
     .map(r => `<span class="q">${esc(r.n)} <span class="mono">${px(r.px)}</span> ${pct(r.r1)}</span>`);
-  const news = (LIVE?.news?.length ? LIVE.news : D.summary.news || []).slice(0, 25)
+  const news = myNews(LIVE?.news?.length ? LIVE.news : D.summary.news || []).slice(0, 25)
     .map(n => `<a href="${esc(safe(n.u))}" target="_blank" rel="noopener"><b>${esc(n.s || 'NEWS')}</b>${esc(n.t)}${n.at ? ` <span class="dim">${esc(ago(n.at))}</span>` : ''}</a>`);
   const items = [...marks, ...news].join('');
   tr.innerHTML = items + items;  // doubled so the -50% scroll loops seamlessly
   tr.style.setProperty('--dur', `${Math.max(60, (marks.length + news.length) * 7)}s`);
+}
+
+// Breaking-news pop-ups: new headlines from the profile's chosen outlets slide in at the top (max 3 at once).
+// The "seen" mark is per profile and device, so reopening the app doesn't replay old headlines.
+function popNews() {
+  if (!ME || !LIVE || !P().news.popup) return;
+  const key = `seen:${ME.id}`, seen = store.get(key, null);
+  const items = myNews(LIVE.news).filter(n => n.src).map(n => ({ ...n, ts: Date.parse(n.at) || 0 })).filter(n => n.ts);
+  if (!items.length) return;
+  const cutoff = seen ?? Date.now() - 45 * 60000;  // first run: only the last 45 minutes
+  const fresh = items.filter(n => n.ts > cutoff).sort((a, b) => b.ts - a.ts).slice(0, 3);
+  store.set(key, Math.max(cutoff, ...items.map(n => n.ts)));
+  fresh.reverse().forEach(showPop);
+}
+function showPop(n) {
+  let box = $('#pops');
+  if (!box) { box = Object.assign(document.createElement('div'), { id: 'pops', className: 'pops' }); box.setAttribute('aria-live', 'polite'); document.body.append(box); }
+  while (box.children.length >= 3) box.firstChild.remove();
+  const card = document.createElement('div');
+  card.className = 'pop';
+  card.innerHTML = `<a href="${esc(safe(n.u))}" target="_blank" rel="noopener"><b>${esc(n.s || 'NEWS')} · ${Date.now() - (Date.parse(n.at) || 0) < 3600000 ? 'BREAKING' : 'LATEST'}</b><span>${esc(n.t)}</span><small>${esc(ago(n.at))}</small></a><button aria-label="Dismiss">✕</button>`;
+  let t = setTimeout(() => card.remove(), 15000);
+  card.onmouseenter = () => clearTimeout(t);
+  card.onmouseleave = () => { t = setTimeout(() => card.remove(), 5000); };
+  $('button', card).onclick = () => card.remove();
+  $('a', card).onclick = () => setTimeout(() => card.remove(), 300);
+  box.append(card);
 }
 
 // ---------------------------------------------------------------- formatting
@@ -715,7 +751,9 @@ VIEWS.news = async (_, main) => {
   const items = S.news.filter(n => g === 'All' || n.g === g);
   const byDay = {};
   for (const e of S.calendar || []) (byDay[sgt(e.at, { weekday: 'short', day: 'numeric', month: 'short' })] ||= []).push(e);
+  const brk = myNews(LIVE?.news).filter(n => n.src);
   main.innerHTML = `<div class="grid wide">
+    ${panel(`Breaking · your ${P().news.sources.length} outlets${LIVE ? ` · updated ${esc(sgt(LIVE.at, { hour: '2-digit', minute: '2-digit' }))}` : ''}`, `<ul class="list">${brk.slice(0, 40).map(n => `<li><span class="tag">${esc(n.s)}</span> <a href="${esc(safe(n.u))}" target="_blank" rel="noopener">${esc(n.t)}</a><br><small>${n.at ? esc(ago(n.at)) : ''}</small></li>`).join('') || '<li class="muted">No fresh headlines from your outlets yet. Choose outlets in Settings → Breaking news.</li>'}</ul>`, '<a class="note" href="#settings">choose outlets</a>')}
     ${panel('Headlines', `<div class="pb chips">${['All', ...groups].map(x => `<button class="chip ${x === g ? 'on' : ''}" data-g="${esc(x)}">${esc(x)}</button>`).join('')}</div>
       <ul class="list">${items.map(n => `<li><span class="tag">${esc(n.g)}${n.sym ? ' · ' + esc(n.sym) : ''}</span> <a href="${esc(safe(n.u))}" target="_blank" rel="noopener">${esc(n.t)}</a><br><small>${esc(n.s || '')} · ${n.at ? esc(ago(n.at)) : ''}</small></li>`).join('')}</ul>`)}
     ${panel('Economic calendar this week (SGT)', `<div class="tw"><table><thead><tr><th>Time</th><th class="l">Ccy</th><th class="l">Event</th><th class="l">Impact</th><th>Forecast</th><th>Previous</th></tr></thead><tbody>
@@ -1174,6 +1212,11 @@ VIEWS.settings = async (_, main) => {
       <p class="note" id="pmsg">${sub ? (ST.subs.some(s => s.endpoint === sub.endpoint && !s.del) ? `On for ${esc(ME.name)} on this device.` : 'This device is subscribed for another profile. Tap Enable to move it here.') : ''}${TOKEN ? '' : ' Needs GitHub sync (Family below) first.'}</p>`}
       <form id="nf">${N.map(([k, n]) => `<label class="toggle"><input type="checkbox" name="${k}" ${pr.notify[k] ? 'checked' : ''}> ${n}</label>`).join('')}</form>
       <p class="note">Install as an app: iPhone Safari → Share → Add to Home Screen · Android Chrome → ⋮ → Install app · Desktop Chrome → install icon in the address bar.</p></div>`)}
+    ${panel('Breaking news', `<form class="pb" id="bnF"><label class="toggle"><input type="checkbox" name="popup" ${pr.news.popup ? 'checked' : ''}> Pop-up cards for new headlines while the app is open</label>
+      <label class="toggle"><input type="checkbox" name="push" ${pr.notify.breaking ? 'checked' : ''}> Also send them as phone notifications (busy!)</label>
+      <p class="note">Outlets (market-related headlines only; sports filtered out):</p>
+      <div class="form">${NEWS_SOURCES.map(([id, n]) => `<label class="toggle"><input type="checkbox" name="src" value="${id}" ${pr.news.sources.includes(id) ? 'checked' : ''}> ${esc(n)}</label>`).join('')}</div>
+      <div class="row"><button class="btn">SAVE</button><button type="button" class="btn ghost" id="bnTest">SHOW A SAMPLE POP-UP</button></div></form>`)}
     ${panel('Family · GitHub sync & live data', `<div class="pb">${TOKEN ? `<p class="up">GitHub sync connected for the whole family (${esc(REPO)}).</p>` : `<p>One-time setup for the whole family: create a fine-grained GitHub token for <b>${esc(REPO)}</b> only, with <b>Contents</b> and <b>Actions</b> set to Read and write. It's stored encrypted with the family password, so every family device picks it up automatically.</p>
       <p><a class="btn ghost" href="${esc(tokenUrl)}" target="_blank" rel="noopener">CREATE TOKEN ON GITHUB ↗</a></p>`}
       <form class="row" id="tokF"><input class="f sp" id="tok" type="password" placeholder="${TOKEN ? 'Replace token: github_pat_…' : 'github_pat_…'}" autocomplete="off"><button class="btn">${TOKEN ? 'REPLACE' : 'SAVE'}</button></form><p class="err" id="tokMsg"></p>
@@ -1210,6 +1253,13 @@ VIEWS.settings = async (_, main) => {
     ST.prefs = { ...pr, home: f.get('home'), mkt: f.get('mkt'), acct: num('acct', 1, 1e9), risk: num('risk', 0.1, 10), move: num('move', 1, 50), ticker: !!f.get('ticker'), shariahOnly: !!f.get('shariahOnly') };
     saveState(); paintTicker(); toast('Preferences saved');
   };
+  $('#bnF').onsubmit = e => {
+    e.preventDefault();
+    const f = new FormData(e.target), sources = f.getAll('src');
+    ST.prefs = { ...P(), news: { popup: !!f.get('popup'), sources }, notify: { ...P().notify, breaking: !!f.get('push') } };
+    saveState(); paintTicker(); toast(`Breaking news: ${sources.length} outlets${f.get('popup') ? ', pop-ups on' : ''}`); route(true);
+  };
+  $('#bnTest').onclick = () => { const n = myNews(LIVE?.news).find(x => x.src); showPop(n || { s: 'CNA', t: 'Sample: this is how a breaking headline appears', at: now(), u: '#' }); };
   $('#nf').onchange = () => { const f = new FormData($('#nf')); ST.prefs = { ...P(), notify: Object.fromEntries(N.map(([k]) => [k, !!f.get(k)])) }; saveState(); toast('Notification settings saved'); };
   let resetArm = false;
   $('#paf').onsubmit = e => {

@@ -16,7 +16,9 @@ GitHub Actions
     ├─ AI daily brief / weekly report (Gemini free tier via LLM_API_KEY) + number check + data appendix
     └─ encrypt → force-push orphan `market` branch; per-profile push notifications
   live.yml (every ~10 min) → scripts/build.py live
-    └─ quotes for macro + ideas + every family watchlist/paper position, FX, breaking news → orphan `live` branch;
+    └─ quotes for macro + ideas + every family watchlist/paper position, FX, market headlines from 14 chosen outlets
+       (Reuters, Bloomberg, CNBC, BBC, Al Jazeera, FT, WSJ, Yahoo Finance, CNA, Straits Times, Business Times,
+       Bernama, The Edge Malaysia, The Star) → orphan `live` branch; pop-up cards on the site;
        price alerts, big moves, triggered paper orders, optional breaking-news pushes
 Static site on GitHub Pages (index.html, app.js, paper.js, learn.js)
   └─ derives the key from the password, reads market/ live/ data/ branches; optional Cloudflare Worker for 1-min quotes

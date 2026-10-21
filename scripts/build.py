@@ -993,7 +993,17 @@ def alerts(p, st, q, sent, today):
 # ---------------------------------------------------------------- live mode: quotes + breaking news every ~10 minutes
 
 LIVE_OUT = Path(os.environ.get('LIVE_OUT', 'liveout'))
-BREAKING_Q = ['stock market', 'Wall Street stocks', 'Bursa Malaysia', 'Singapore stocks STI', 'Federal Reserve', 'oil prices', 'gold prices', 'Asian markets']
+# Breaking-news sources the family picked (2026-10-21). Pulled through Google News' per-site search, which works for
+# every outlet (most no longer publish RSS). General outlets get a market-keyword filter; business outlets don't need it.
+NEWS_SOURCES = {  # id: (name, domain, business-only outlet?)
+    'reuters': ('Reuters', 'reuters.com', False), 'bloomberg': ('Bloomberg', 'bloomberg.com', True), 'cnbc': ('CNBC', 'cnbc.com', True),
+    'bbc': ('BBC News', 'bbc.com', False), 'aljazeera': ('Al Jazeera', 'aljazeera.com', False), 'ft': ('Financial Times', 'ft.com', True),
+    'wsj': ('Wall Street Journal', 'wsj.com', True), 'yahoo': ('Yahoo Finance', 'finance.yahoo.com', True), 'cna': ('CNA', 'channelnewsasia.com', False),
+    'bernama': ('Bernama', 'bernama.com', False), 'edge': ('The Edge Malaysia', 'theedgemalaysia.com', True), 'star': ('The Star', 'thestar.com.my', False),
+    'st': ('The Straits Times', 'straitstimes.com', False), 'bt': ('The Business Times', 'businesstimes.com.sg', True),
+}
+MARKET_WORDS = ('(stocks OR shares OR market OR markets OR economy OR inflation OR "interest rate" OR "central bank" OR earnings OR profit '
+                'OR IPO OR bonds OR yields OR dollar OR ringgit OR oil OR "gold price" OR "gold prices" OR GDP OR tariff OR Fed OR Bursa OR SGX OR STI OR "Wall Street" OR investors)')
 
 
 def quotes(syms):
@@ -1018,16 +1028,23 @@ def quotes(syms):
 
 
 def breaking():
+    """Newest market headlines from each chosen outlet, tagged with the source id so each profile can filter."""
     items = []
-    for q in BREAKING_Q:
-        try: items += gnews(q, 6, when='2h') or gnews(q, 3, when='1d')
-        except Exception as e: print('breaking', q, e)
+    for sid, (name, dom, biz) in NEWS_SOURCES.items():
+        q = f'site:{dom} {MARKET_WORDS}'
+        try: got = gnews(q, 8, when='3h') or gnews(q, 4, when='1d')
+        except Exception as e: print('breaking', sid, e); continue
+        items += [dict(x, src=sid, s=name) for x in got]
     seen, out = set(), []
     for x in sorted(items, key=lambda x: _ts(x.get('at')), reverse=True):
         if sum(ord(c) > 0x24F for c in x['t']) > len(x['t']) * .3: continue  # English feed, but Google mixes in other scripts
+        if SPORT.search(x['t']): continue
         k = x['t'].lower()[:70]
         if k not in seen: seen.add(k); out.append(x)
-    return out[:40]
+    return out  # at most 8 per outlet, so a busy outlet can't crowd out a slow one
+
+
+SPORT = re.compile(r'\b(medal|games|cup|league|tournament|championship|olympic|match|goal|striker|badminton|football|cricket|F1)\b', re.I)
 
 
 def _ts(s):
@@ -1056,7 +1073,8 @@ def live_main(profs):
     for p, st in profs:
         msgs = alerts(p, st, {s: {**v, 'n': names.get(s)} for s, v in q.items()}, sent, today)
         if prefs(st)['notify']['breaking']:
-            for n in news[:3]:
+            mine = set(((st.get('prefs') or {}).get('news') or {}).get('sources') or NEWS_SOURCES)
+            for n in [n for n in news if n.get('src') in mine][:3]:
                 if _ts(n.get('at')) > NOW.timestamp() - 1800 and sent.get(f'{p["id"]}:news:{n["t"][:60]}') is None:
                     sent[f'{p["id"]}:news:{n["t"][:60]}'] = today
                     msgs.append({'title': 'Breaking', 'body': n['t'][:180], 'url': '#news', 'tag': 'breaking'})

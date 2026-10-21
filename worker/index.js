@@ -3,7 +3,8 @@
 // GET /news?k=KEY                    -> { at, news: [{ t, u, s, at }] }
 // Secrets/vars: KEY (shared secret, also saved encrypted in the site's vault), ALLOW_ORIGIN (the site's origin).
 const SYM = /^[A-Za-z0-9.^=-]{1,20}$/;
-const NEWS_Q = ['stock market', 'Bursa Malaysia', 'Singapore stocks', 'Wall Street'];
+const MARKET_WORDS = '(stocks OR shares OR market OR markets OR economy OR inflation OR "interest rate" OR "central bank" OR earnings OR profit OR IPO OR bonds OR yields OR dollar OR ringgit OR oil OR "gold price" OR GDP OR tariff OR Fed OR Bursa OR SGX OR STI OR "Wall Street" OR investors)';
+const SPORT = /\b(medal|games|cup|league|tournament|championship|olympic|match|goal|striker|badminton|football|cricket|F1)\b/i;
 
 export default {
   async fetch(req, env, ctx) {
@@ -29,18 +30,20 @@ export default {
       return json({ at: new Date().toISOString(), q });
     }
     if (url.pathname === '/news') {
-      const items = (await Promise.all(NEWS_Q.map(async term => {
+      // d = the outlets the person chose (domains), each searched for market headlines
+      const doms = (url.searchParams.get('d') || 'reuters.com,cnbc.com,channelnewsasia.com,bernama.com').split(',').filter(x => /^[a-z0-9.-]{3,40}$/.test(x)).slice(0, 20);
+      const items = (await Promise.all(doms.map(async dom => {
         try {
-          const r = await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(term)}+when:2h&hl=en-SG&gl=SG&ceid=SG:en`, { cf: { cacheTtl: 60, cacheEverything: true } });
+          const r = await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(`site:${dom} ${MARKET_WORDS}`)}+when:3h&hl=en-SG&gl=SG&ceid=SG:en`, { cf: { cacheTtl: 60, cacheEverything: true } });
           return [...(await r.text()).matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 8).map(([, x]) => {
             const g = tag => (x.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`)) || [])[1]?.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim();
             const s = g('source') || '', t = g('title') || '';
-            return { t: s && t.endsWith(` - ${s}`) ? t.slice(0, -s.length - 3) : t, u: g('link'), s, at: g('pubDate') };
+            return { t: s && t.endsWith(` - ${s}`) ? t.slice(0, -s.length - 3) : t, u: g('link'), s, at: g('pubDate'), dom };
           });
         } catch { return []; }
       }))).flat();
       const seen = new Set();
-      const news = items.filter(n => n.t && [...n.t].filter(c => c.codePointAt(0) > 0x24F).length <= n.t.length * .3 && !seen.has(n.t) && seen.add(n.t)).sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 40);
+      const news = items.filter(n => n.t && !SPORT.test(n.t) && [...n.t].filter(c => c.codePointAt(0) > 0x24F).length <= n.t.length * .3 && !seen.has(n.t) && seen.add(n.t)).sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 120);
       return json({ at: new Date().toISOString(), news });
     }
     return new Response('{"error":"not found"}', { status: 404, headers: cors });
