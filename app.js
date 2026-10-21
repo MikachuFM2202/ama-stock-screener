@@ -3,8 +3,11 @@
 // branch (quotes + breaking news every ~10 min) -> this page. An optional Cloudflare Worker gives 1-minute quotes.
 // Family data (profiles, watchlists, notes, paper trading, push subscriptions) lives encrypted on the `data` branch;
 // writes need a GitHub token, stored encrypted there too (vault.bin), so every device unlocks it with the password.
-import { LEARN, PATTERNS, GLOSSARY, RESOURCES, candleSvg } from './learn.js';
-import * as PT from './paper.js';
+// Modules load with the same ?v= stamp as app.js (set in index.html on every commit), so a phone holding cached
+// files from the previous deploy can never mix a new app.js with an old paper.js or learn.js.
+const V = new URL(import.meta.url).search;
+const { LEARN, PATTERNS, GLOSSARY, RESOURCES, candleSvg } = await import(`./learn.js${V}`);
+const PT = await import(`./paper.js${V}`);
 
 const qs = new URLSearchParams(location.search);
 const REPO = qs.get('repo') || (() => {
@@ -112,7 +115,7 @@ const now = () => new Date().toISOString();
 const blank = () => ({ v: 2, at: 0, wl: [], notes: {}, journal: [], later: [], quick: [], subs: [], prefs: structuredClone(DEF_PREFS), paper: PT.newAccount() });
 let FAMILY = store.get('family', { list: [], at: 0 });
 let ME = null, ST = blank();
-const people = () => FAMILY.list.filter(p => !p.del);
+const people = () => FAMILY.list.filter(p => !p.del).map(p => /^#[0-9a-f]{6}$/i.test(p.color || '') ? p : { ...p, color: COLORS[0] });
 const P = () => ({ ...DEF_PREFS, ...ST.prefs, notify: { ...DEF_PREFS.notify, ...(ST.prefs?.notify || {}) }, news: { ...DEF_PREFS.news, ...(ST.prefs?.news || {}) } });
 const myNews = list => { const mine = new Set(P().news.sources); return (list || []).filter(n => !n.src || mine.has(n.src)); };
 

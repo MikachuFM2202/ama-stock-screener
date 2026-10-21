@@ -238,3 +238,6 @@ dl.gl dt { font: 600 13px var(--mono); color: var(--amber2); }
 @media (prefers-reduced-motion: reduce) { .pop { animation: none; } }
 
 .form label.toggle { display: flex; flex-direction: row; align-items: center; gap: 10px; color: var(--text); font-size: 14px; }
+
+/* short screens (phone in landscape): only the header stays pinned */
+@media (max-height: 500px) and (min-width: 761px) { .tabs, .ticker { position: static; } }
