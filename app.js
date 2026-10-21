@@ -676,7 +676,7 @@ VIEWS.dash = async (arg, main) => {
   const heat = treemap(tiles, R).map(t => `<a class="tile${t.w * t.h < 60 ? ' xs' : ''}" href="${esc(t.href)}" style="left:${t.x}%;top:${t.y}%;width:${t.w}%;height:${t.h}%;background:${heatBg(t.c)}" title="${esc(t.k)} ${t.c == null ? '' : (t.c * 100).toFixed(2) + '%'}"><b>${esc(t.k)}</b><span>${t.c == null ? '' : (t.c > 0 ? '+' : '') + (t.c * 100).toFixed(2) + '%'}</span></a>`).join('');
   const liveAt = LIVE?.at ? `live ${esc(sgt(LIVE.at, { hour: '2-digit', minute: '2-digit' }))} SGT${Date.now() - Date.parse(LIVE.at) > 30 * 60000 ? ' (stale)' : ''}` : 'snapshot prices';
   const subnav = `<div class="chips dsub">${[['', 'Home'], ['themes', 'Investment themes'], ['inst', 'Institutional tracker'], ['patterns', 'Pattern finder'], ['cal', 'Economic calendar']].map(([k, t]) => `<a class="chip ${sub === k ? 'on' : ''}" href="${k === 'cal' ? '#news' : `#dash/${id}${k ? '/' + k : ''}`}">${t}</a>`).join('')}
-    <button class="chip ${dashAll ? '' : 'on'}" id="dshAll" title="Lists below: Shariah-compliant (C+P) only, or every stock">${dashAll ? 'All stocks' : 'Shariah only'}</button></div>`;
+    ${sub ? `<button class="chip ${dashAll ? '' : 'on'}" id="dshAll" title="Lists below: Shariah-compliant (C+P) only, or every stock">${dashAll ? 'All stocks' : 'Shariah only'}</button>` : ''}</div>`;
   const regChips = `<div class="chips dreg">${REGIONS.map(r => `<a class="chip ${r[0] === id ? 'on' : ''}" href="#dash/${r[0]}${sub ? '/' + sub : ''}">${esc(r[1])}</a>`).join('')}
       <span class="sep"></span>${ASSETS.map(([aid, , t]) => `<a class="chip" href="#${aid}">${esc(t)}</a>`).join('')}</div>`;
   const pool = rows.filter(r => dashAll || isSh(r));
@@ -750,7 +750,6 @@ VIEWS.dash = async (arg, main) => {
   };
   $$('.icard', main).forEach(b => b.onclick = () => { dashSel[id] = b.dataset.idx; route(true); });
   $$('[data-heat]', main).forEach(b => b.onclick = () => { dashHeat = b.dataset.heat; route(true); });
-  $('#dshAll').onclick = () => { dashAll = !dashAll; route(true); };
   side();
   for (const r of idxRows.slice(0, 3)) mk(`ohlc/${r.s.replace(/[^A-Za-z0-9.-]/g, '_')}.bin`).then(b => {
     const c = b?.c?.filter(x => x != null).slice(-60), el = main.querySelector(`[data-sp="${CSS.escape(r.s)}"]`);
