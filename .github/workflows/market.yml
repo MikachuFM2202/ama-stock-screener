@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       mode: { type: choice, options: [evening, daily, weekly], default: evening }
-  repository_dispatch: { types: [test-push] }
+  repository_dispatch: { types: [test-push, snapshot] }
 permissions: { contents: write }
 concurrency: { group: market, cancel-in-progress: false }
 jobs:
@@ -36,10 +36,12 @@ jobs:
           mkdir -p datadir && git archive origin/data | tar -x -C datadir
       - name: Pick mode
         id: m
+        env: { PMODE: '${{ github.event.client_payload.mode }}' }
         run: |
-          case "${{ github.event_name }}|${{ github.event.schedule }}" in
+          case "${{ github.event_name }}|${{ github.event.action }}|${{ github.event.schedule }}" in
             workflow_dispatch*) echo "mode=${{ inputs.mode }}" ;;
-            repository_dispatch*) echo "mode=testpush" ;;
+            repository_dispatch\|test-push*) echo "mode=testpush" ;;
+            repository_dispatch\|snapshot*) case "$PMODE" in daily|evening|weekly) echo "mode=$PMODE" ;; *) echo "mode=evening" ;; esac ;;
             *'0 9 * * 0') echo "mode=weekly" ;;
             *'15 10 * * 1-5') echo "mode=evening" ;;
             *) echo "mode=daily" ;;

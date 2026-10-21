@@ -469,6 +469,20 @@ function softRoute() {
 }
 async function pollLive() {
   if (await loadLive().catch(() => false)) { processOrders(); softRoute(); }
+  autoKick();
+}
+// Fallback for GitHub's scheduler, which can skip or delay runs for hours: when the app sees stale data and has the
+// family token, it asks GitHub for a run itself. Throttled per device; the workflows queue duplicates.
+async function autoKick() {
+  if (!TOKEN || !D.summary) return;
+  const runs = store.get('autoRun', {}), t = Date.now();
+  const kick = async (kind, body) => { runs[kind] = t; store.set('autoRun', runs); try { await gh('dispatches', { method: 'POST', body: JSON.stringify(body) }); } catch {} };
+  if (!CFG.worker?.url && (!LIVE || t - Date.parse(LIVE.at) > 20 * 60000) && t - (runs.live || 0) > 15 * 60000) await kick('live', { event_type: 'refresh' });
+  if (t - Date.parse(D.summary.at) > 16 * 3600000 && t - (runs.market || 0) > 3 * 3600000) {
+    const { wd, m } = zoned('Asia/Singapore');
+    const mode = wd === 'Sun' && m >= 17 * 60 ? 'weekly' : wd !== 'Sun' && m < 12 * 60 ? 'daily' : 'evening';
+    await kick('market', { event_type: 'snapshot', client_payload: { mode } });
+  }
 }
 // The ⟳ button: re-read everything now; with a GitHub token also ask the server for fresh quotes (~1–2 min).
 async function refreshNow() {
@@ -1223,7 +1237,7 @@ VIEWS.settings = async (_, main) => {
       <h3 class="amber">Live prices: optional Cloudflare Worker</h3><p class="note">Without it, prices refresh about every 10 minutes from GitHub. With the free Worker (see Learn → Hosting), quotes and headlines refresh every minute.</p>
       <form class="form" id="wkF"><label>Worker URL<input class="f" id="wkU" placeholder="https://ama-live.<you>.workers.dev" value="${esc(CFG.worker?.url || '')}"></label><label>Worker key<input class="f" id="wkK" type="password" autocomplete="off" value="${esc(CFG.worker?.key || '')}"></label><button class="btn ghost">SAVE WORKER</button></form><p class="note" id="wkMsg"></p></div>`)}
     ${panel('Data & backup', `<div class="pb"><p>Snapshot <b>${esc(sgt(D.summary.at))} SGT</b> (${esc(D.summary.mode)}) · live ${LIVE ? esc(sgt(LIVE.at)) + ' via ' + (liveFrom === 'worker' ? 'Worker' : 'GitHub') : 'not yet'}. Universe: ${Object.entries(D.summary.counts || {}).map(([m, c]) => `${m} ${Object.entries(c).map(([k, v]) => `${k}:${v}`).join(' ')}`).join(' · ')}.</p>
-      <ul><li>Every ~10 min: live quotes, FX, breaking news, alerts</li><li>Mon–Sat 06:30 SGT: US close + daily AI brief</li><li>Mon–Fri 18:15 SGT: Asia close refresh</li><li>Sun 17:00 SGT: universe + Shariah re-screen + full weekly report</li></ul>
+      <ul><li>Every ~10 min: live quotes, FX, breaking news, alerts (if GitHub's scheduler stalls, any family device with the app open asks for a run)</li><li>Mon–Sat 06:30 SGT: US close + daily AI brief</li><li>Mon–Fri 18:15 SGT: Asia close refresh</li><li>Sun 17:00 SGT: universe + Shariah re-screen + full weekly report</li></ul>
       <div class="row"><button class="btn ghost" id="exp">EXPORT MY DATA</button><label class="btn ghost" style="cursor:pointer">IMPORT…<input type="file" id="imp" accept="application/json" hidden></label><button class="btn ghost" id="logout">LOCK THIS DEVICE</button></div>
       <p class="note">Sources: Yahoo Finance (delayed), SC Malaysia SAC list (${esc(D.summary.sc?.asof || '?')}), SP Funds S&P Shariah ETF holdings, own AAOIFI-style screen, Zoya/Musaffa links, Google News, Forex Factory, YouTube/podcast RSS. Everything published is AES-256-GCM encrypted with the family password.</p></div>`)}
     ${panel('moomoo OpenAPI', `<div class="pb md">${LEARN.find(x => x.id === 'moomoo').html}</div>`)}
