@@ -4,4 +4,12 @@ compatibility_date = "2026-10-01"
 
 [vars]
 ALLOW_ORIGIN = "https://mikachufm2202.github.io"
-# Set the shared key as a secret, never here:  npx wrangler secret put KEY
+REPO = "MikachuFM2202/ama-stock-screener"
+
+# Starts the GitHub jobs on time (needs the GH_TOKEN secret). Times are UTC; see CRON in index.js.
+[triggers]
+crons = ["*/10 * * * *", "30 22 * * SUN-FRI", "15 10 * * MON-FRI", "0 9 * * SUN"]
+
+# Secrets, never in this file:
+#   npx wrangler secret put KEY        (any long random string; paste it in Settings → Family too)
+#   npx wrangler secret put GH_TOKEN   (the same fine-grained token: Contents read/write on this repo)

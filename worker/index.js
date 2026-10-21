@@ -1,12 +1,26 @@
 // Cloudflare Worker for AMA Stock Screener: 1-minute quotes and headlines (optional; the site works without it).
 // GET /q?k=KEY&s=AAPL,5347.KL,...   -> { at, q: { SYM: { p, c, h, l, d } } }   (max 45 symbols: free-plan subrequest limit)
 // GET /news?k=KEY                    -> { at, news: [{ t, u, s, at }] }
-// Secrets/vars: KEY (shared secret, also saved encrypted in the site's vault), ALLOW_ORIGIN (the site's origin).
+// Secrets/vars: KEY (shared secret, also saved encrypted in the site's vault), ALLOW_ORIGIN (the site's origin),
+// optional GH_TOKEN + REPO: then the Worker's cron triggers start the GitHub jobs on time (GitHub's own scheduler
+// skipped every run for this repo on 2026-10-21; Cloudflare's cron is the reliable clock).
+const CRON = {  // Cloudflare cron (UTC) -> repository_dispatch for the GitHub workflows
+  '*/10 * * * *': { event_type: 'refresh' },
+  '30 22 * * SUN-FRI': { event_type: 'snapshot', client_payload: { mode: 'daily' } },   // 06:30 SGT Mon-Sat
+  '15 10 * * MON-FRI': { event_type: 'snapshot', client_payload: { mode: 'evening' } }, // 18:15 SGT
+  '0 9 * * SUN': { event_type: 'snapshot', client_payload: { mode: 'weekly' } },        // 17:00 SGT Sunday
+};
 const SYM = /^[A-Za-z0-9.^=-]{1,20}$/;
 const MARKET_WORDS = '(stocks OR shares OR market OR markets OR economy OR inflation OR "interest rate" OR "central bank" OR earnings OR profit OR IPO OR bonds OR yields OR dollar OR ringgit OR oil OR "gold price" OR GDP OR tariff OR Fed OR Bursa OR SGX OR STI OR "Wall Street" OR investors)';
 const SPORT = /\b(medal|games|cup|league|tournament|championship|olympic|match|goal|striker|badminton|football|cricket|F1)\b/i;
 
 export default {
+  async scheduled(event, env, ctx) {
+    const body = CRON[event.cron];
+    if (!body || !env.GH_TOKEN || !env.REPO) return;
+    ctx.waitUntil(fetch(`https://api.github.com/repos/${env.REPO}/dispatches`, { method: 'POST', body: JSON.stringify(body),
+      headers: { Authorization: `Bearer ${env.GH_TOKEN}`, Accept: 'application/vnd.github+json', 'User-Agent': 'ama-live-worker', 'X-GitHub-Api-Version': '2022-11-28' } }));
+  },
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     const cors = { 'Access-Control-Allow-Origin': env.ALLOW_ORIGIN || 'https://mikachufm2202.github.io', Vary: 'Origin', 'Cache-Control': 'no-store', 'Content-Type': 'application/json' };

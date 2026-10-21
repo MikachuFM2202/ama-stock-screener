@@ -50,6 +50,7 @@ On the site, **Settings → Family** takes a fine-grained GitHub token (this rep
 cd worker
 npx wrangler login                 # use the approved Cloudflare account
 npx wrangler secret put KEY        # any long random string
+npx wrangler secret put GH_TOKEN   # fine-grained token for this repo: makes the Worker start the GitHub jobs on time
 npx wrangler deploy
 ```
 Paste the Worker URL and key in **Settings → Family → Live prices**. See Learn → Hosting for the GitHub vs Cloudflare comparison.
@@ -76,4 +77,5 @@ To preview locally, serve a folder with the site files plus `market/`, `live/` a
 - A **P** status is a screen result, not a fatwa. Check Zoya/Musaffa for the revenue breakdown.
 - Profile PINs stop casual switching; they are not separate encryption. Everyone with the family password can read all profiles.
 - The repo is public (free Pages), so the encrypted files can be downloaded and guessed at offline. Use a long family passphrase.
+- GitHub's scheduler never fired for this repo on its first day. The Worker's cron triggers (with GH_TOKEN) are the reliable clock; without the Worker, any family device with the app open and a token requests a run when data is stale.
 - GitHub disables scheduled workflows after 60 days without repository activity. The live job's pushes don't count; any commit or manual run does.
