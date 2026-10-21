@@ -205,14 +205,15 @@ dl.gl dt { font: 600 13px var(--mono); color: var(--amber2); }
 
 /* phone: bottom navigation, bigger tap targets */
 .bnav { display: none; }
-.sheet { position: fixed; inset: auto 0 calc(58px + env(safe-area-inset-bottom)) 0; z-index: 40; background: #0b0b0b; border-top: 1px solid var(--amber); padding: 10px var(--gut); display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.sheet a { padding: 12px 6px; text-align: center; border: 1px solid var(--line2); color: var(--text); font-size: 13px; }
-.sheet a b { display: block; color: var(--amber); font-size: 11px; }
 @media (max-width: 760px) {
   .tabs { display: none; }
   .ticker { top: var(--top-h, 52px); }
-  .bnav { display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: #000; border-top: 1px solid var(--amber); padding-bottom: env(safe-area-inset-bottom); }
-  .bnav a { display: grid; justify-items: center; gap: 2px; padding: 8px 2px 9px; color: var(--muted); font-size: 11px; min-height: 52px; }
+  .bnav { display: flex; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scrollbar-width: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: #000; border-top: 1px solid var(--amber); padding-bottom: env(safe-area-inset-bottom);
+    /* fade on the right edge hints that the bar scrolls */
+    -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent); mask-image: linear-gradient(90deg, #000 88%, transparent); }
+  .bnav::-webkit-scrollbar { display: none; }
+  .bnav.end { -webkit-mask-image: none; mask-image: none; }
+  .bnav a { flex: 0 0 19%; min-width: 66px; scroll-snap-align: start; display: grid; justify-items: center; gap: 2px; padding: 8px 2px 9px; color: var(--muted); font-size: 11px; min-height: 52px; }
   .bnav a b { font-size: 13px; color: var(--amber); font-weight: 700; }
   .bnav a.on { background: var(--amber); color: #000; } .bnav a.on b { color: #000; }
   main { padding-bottom: calc(90px + env(safe-area-inset-bottom)); }

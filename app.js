@@ -387,11 +387,12 @@ const BNAV = ['mkt', 'quick', 'wl', 'paper'];
 let cleanup = [], lastDispatch = 0, fastPoll = 0;
 function shell() {
   $('#tabs').innerHTML = TABS.map(([id, k, n]) => `<a href="#${id}" data-tab="${id}"><b>${k}</b>${n}</a>`).join('');
-  $('#bnav').innerHTML = BNAV.map(id => { const t = TABS.find(x => x[0] === id); return `<a href="#${id}" data-tab="${id}"><b>${t[1]}</b>${t[2].split(' ')[0]}</a>`; }).join('')
-    + '<a href="#" id="more" data-tab="more"><b>•••</b>More</a>';
-  $('#sheet').innerHTML = TABS.filter(t => !BNAV.includes(t[0])).map(([id, k, n]) => `<a href="#${id}"><b>${k}</b>${n}</a>`).join('');
-  $('#more').onclick = e => { e.preventDefault(); $('#sheet').hidden = !$('#sheet').hidden; };
-  $('#sheet').onclick = () => { $('#sheet').hidden = true; };
+  // Phone: every tab in one bottom bar that scrolls sideways (most-used first); the active tab scrolls into view.
+  const order = [...BNAV, ...TABS.map(t => t[0]).filter(id => !BNAV.includes(id))];
+  const bnEnd = () => { const n = $('#bnav'); n.classList.toggle('end', n.scrollLeft + n.clientWidth >= n.scrollWidth - 4); };
+  $('#bnav').addEventListener('scroll', bnEnd, { passive: true }); addEventListener('resize', bnEnd);
+  setTimeout(bnEnd, 300);
+  $('#bnav').innerHTML = order.map(id => { const t = TABS.find(x => x[0] === id); return `<a href="#${id}" data-tab="${id}"><b>${t[1]}</b>${t[2].split(' ')[0]}</a>`; }).join('');
   const h = () => {
     document.documentElement.style.setProperty('--top-h', $('.top').offsetHeight + 'px');
     document.documentElement.style.setProperty('--tabs-h', $('#tabs').offsetHeight + 'px');
@@ -482,8 +483,9 @@ async function route(keep = false) {
   const [v, ...rest] = location.hash.slice(1).split('/');
   const view = VIEWS[v] ? v : P().home in VIEWS ? P().home : 'mkt';
   const tab = view === 'stock' ? '' : view === 'reports' ? 'brief' : view;
-  $$('#tabs a, #bnav a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab || (a.dataset.tab === 'more' && !BNAV.includes(tab) && tab !== '')));
-  $('#sheet').hidden = true;
+  $$('#tabs a, #bnav a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
+  const on = $('#bnav a.on'), bn = $('#bnav');  // scroll the bar only, never the page
+  if (on && bn.scrollWidth > bn.clientWidth) bn.scrollTo({ left: on.offsetLeft - bn.clientWidth / 2 + on.offsetWidth / 2, behavior: 'smooth' });
   const main = $('#main'), y = scrollY;
   if (!keep) main.innerHTML = '<p class="muted">Loading…</p>';
   try { await VIEWS[view](decodeURIComponent(rest.join('/')), main); }
