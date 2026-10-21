@@ -1219,12 +1219,17 @@ def live_main(profs):
     q = quotes(syms)
     fxq = quotes([f'{c}=X' for c in (summary.get('fx') or {'SGD': 1, 'MYR': 1}) if c not in ('USD', 'GBp')])
     fx = {s[:-2]: v['p'] for s, v in fxq.items()}
+    fxc = {s[:-2]: v['c'] for s, v in fxq.items()}  # 1-day change of each pair (units per USD)
+    # Second FX source to double-check Yahoo: Coinbase's public exchange-rate API (mid-market, no key).
+    try: cb = requests.get('https://api.coinbase.com/v2/exchange-rates?currency=USD', headers=UA, timeout=20).json()['data']['rates']
+    except Exception as e: print('coinbase fx', e); cb = {}
+    fx2 = {c: float(cb[c]) for c in list(fx) + ['MYR'] if c in cb} | ({'USD': 1.0} if cb else {})
     if fx: fx['USD'] = 1.0
     if 'GBP' in fx: fx['GBp'] = fx['GBP'] * 100
     news = breaking()
     LIVE_OUT.mkdir(parents=True, exist_ok=True)
     intra = intraday([s for g in ('Indices', 'Futures') for s, *_ in MACRO[g]])
-    (LIVE_OUT / 'live.bin').write_bytes(seal({'at': NOW.isoformat(), 'q': q, 'fx': fx, 'news': news, 'intra': intra}))
+    (LIVE_OUT / 'live.bin').write_bytes(seal({'at': NOW.isoformat(), 'q': q, 'fx': fx, 'fx2': fx2, 'fxc': fxc, 'news': news, 'intra': intra}))
     try: sent = unseal((LIVE_OUT / 'alerts.bin').read_bytes())
     except Exception: sent = {}
     today, jobs = NOW.date().isoformat(), []

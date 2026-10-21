@@ -424,7 +424,7 @@ function mooCode(s) {
 
 // ---------------------------------------------------------------- shell
 // ---------------------------------------------------------------- shell
-const TABS = [['mkt', 'MKT', 'Market'], ['dash', 'DASH', 'Dashboard'], ['etf', 'ETF', 'ETFs'], ['cmdty', 'CMDY', 'Commodities'], ['crypto', 'CRYP', 'Crypto'], ['fut', 'FUT', 'Futures'], ['bonds', 'BOND', 'Bonds'],
+const TABS = [['mkt', 'MKT', 'Market'], ['dash', 'DASH', 'Dashboard'], ['etf', 'ETF', 'ETFs'], ['cmdty', 'CMDY', 'Commodities'], ['crypto', 'CRYP', 'Crypto'], ['fut', 'FUT', 'Futures'], ['bonds', 'BOND', 'Bonds'], ['fx', 'FX', 'Currency'],
   ['brief', 'BRF', 'Reports'], ['quick', 'SMLL', 'Small account'], ['ideas', 'IDEA', 'Ideas'], ['screen', 'SCRN', 'Screener'],
   ['wl', 'WL', 'Watchlist'], ['paper', 'PAPR', 'Paper'], ['notes', 'NOTE', 'Notes'], ['news', 'NEWS', 'News'],
   ['media', 'TV', 'Watch'], ['learn', 'EDU', 'Learn'], ['shariah', 'SHRH', 'Shariah'], ['glossary', 'GLOS', 'Terms'], ['faq', 'FAQ', 'FAQ'], ['settings', 'SET', 'Settings']];
@@ -450,6 +450,7 @@ function shell() {
   setInterval(() => { if (document.visibilityState === 'visible') refreshMeta(); }, 300000);
   $('#cmd').addEventListener('submit', e => { e.preventDefault(); go($('#cmdIn').value); });
   suggestInit();
+  let curT = 0; new MutationObserver(() => { cancelAnimationFrame(curT); curT = requestAnimationFrame(() => addCurCols($('#main'))); }).observe($('#main'), { childList: true, subtree: true });
   $('#refresh').onclick = refreshNow;
   const stt = $('#stt'), stSet = on => { document.body.classList.toggle('stfull', on); stt.setAttribute('aria-pressed', on); store.set('stfull', on); };
   stt.onclick = () => stSet(!document.body.classList.contains('stfull')); stSet(store.get('stfull', false));
@@ -942,13 +943,13 @@ VIEWS.screen = async (arg, main) => {
       <td>${px(r.px)}</td><td>${pct(r.r1)}</td><td>${pct(r.r21)}</td><td>${pct(r.r63)}</td><td>${pct(r.r252, 0)}</td><td>${r.rsi?.toFixed(0) ?? '–'}</td><td class="${cls(r.score)}">${r.score?.toFixed(0) ?? '–'}</td>
       <td>${fcCell(r.fc, 21)}</td><td>${r.pe ? r.pe.toFixed(1) : '–'}</td><td>${pct(r.roe, 0)}</td><td>${r.dy == null ? '–' : r.dy.toFixed(1) + '%'}</td>
       <td class="${r.dm >= .3 ? 'down' : ''}">${pctp(r.dm)}</td><td class="${r.cm >= .3 ? 'down' : ''}">${pctp(r.cm)}</td><td>${big(r.mc)}</td><td>${big(r.valusd)}</td></tr>`).join('');
-    $$('#st th').forEach(th => th.textContent = cols.find(c => c[0] === th.dataset.k)[1] + (F.sort === th.dataset.k ? (F.dir > 0 ? ' ▲' : ' ▼') : ''));
+    $$('#st th[data-k]').forEach(th => th.textContent = cols.find(c => c[0] === th.dataset.k)[1] + (F.sort === th.dataset.k ? (F.dir > 0 ? ' ▲' : ' ▼') : ''));
   };
   $('#fm').onchange = e => { F.m = e.target.value; draw(); };
   $('#fst').onchange = e => { F.st = e.target.value; draw(); };
   $('#fsec').onchange = e => { F.sec = e.target.value; draw(); };
   $('#fq').oninput = e => { F.q = e.target.value; draw(); };
-  $$('#st th').forEach(th => th.onclick = () => { F.dir = F.sort === th.dataset.k ? -F.dir : ['s', 'n', 'm', 'st'].includes(th.dataset.k) ? 1 : -1; F.sort = th.dataset.k; draw(); });
+  $$('#st th[data-k]').forEach(th => th.onclick = () => { F.dir = F.sort === th.dataset.k ? -F.dir : ['s', 'n', 'm', 'st'].includes(th.dataset.k) ? 1 : -1; F.sort = th.dataset.k; draw(); });
   draw();
 };
 
@@ -1084,6 +1085,66 @@ VIEWS.faq = async (_, main) => {
   main.innerHTML = `<div class="grid wide">${panel('Frequently asked questions', `<div class="pb faq">${FAQ.map(([q, a]) => `<details><summary>${esc(q)}</summary><p>${esc(a)}</p></details>`).join('')}</div>`, '', 'span')}
     ${panel('Disclaimer', `<p class="pb">${esc(DISCLAIMER)}</p>`, '', 'span')}</div>`;
 };
+// ---------------------------------------------------------------- currencies
+// Every price table gets a currency column and the same price in ringgit, inserted after its Last/Price column.
+// A MutationObserver on <main> applies it to any table a view draws or redraws (sorting, live updates).
+const CUR_SYM = { USD: 'US$', MYR: 'RM', SGD: 'S$', HKD: 'HK$', JPY: '¥', CNY: 'CN¥', TWD: 'NT$', KRW: '₩', AUD: 'A$', CAD: 'C$', GBP: '£', GBp: 'p',
+  EUR: '€', CHF: 'Fr', IDR: 'Rp', PHP: '₱', THB: '฿', AED: 'AED', BRL: 'R$', SEK: 'kr', DKK: 'kr', INR: '₹' };
+const noCur = s => s.startsWith('^') || s.endsWith('=X') || ['Indices', 'FX & VIX'].some(g => D.summary?.macro?.[g]?.some(r => r.s === s));  // indices, FX, yields
+const rowCur = s => !s || noCur(s) ? null : (D.bySym.get(s) || macroRow(s))?.cur || curOf(s);
+const toMYR = (v, c) => c && v != null && isFinite(v) ? PT.convert(v, c, 'MYR', D.fx || {}) : null;
+const trSym = tr => tr.dataset.s || decodeURIComponent(((tr.dataset.go || tr.querySelector('a[href^="#stock/"]')?.getAttribute('href') || '').match(/stock\/(.+)$/) || [])[1] || '');
+function addCurCols(root) {
+  for (const t of root.querySelectorAll('table:not([data-cur="0"])')) {
+    const rows = [...t.querySelectorAll('tbody tr')];
+    if (t.dataset.ci == null) {
+      const ths = [...t.querySelectorAll('thead th')], i = ths.findIndex(th => /^(Last|Price)\b/.test(th.textContent.trim()));
+      if (i < 0 || !rows.some(tr => rowCur(trSym(tr)))) { if (i < 0 || rows.length) t.dataset.cur = '0'; continue; }
+      ths[i].insertAdjacentHTML('afterend', '<th class="l">Cur</th><th title="Converted to ringgit at the latest rate (see the Currency tab)">≈ RM</th>');
+      t.dataset.ci = i;
+    }
+    const i = +t.dataset.ci;
+    for (const tr of rows) {
+      if (tr.dataset.cx || tr.cells.length <= i) continue;
+      tr.dataset.cx = 1;
+      const c = rowCur(trSym(tr)), m = c === 'MYR' ? null : toMYR(parseFloat(tr.cells[i].textContent.replace(/[^0-9.-]/g, '')), c);
+      tr.cells[i].insertAdjacentHTML('afterend', `<td class="l cur" title="${esc(c || 'no currency (index or rate)')}">${c ? `<b>${esc(CUR_SYM[c] || '')}</b> ${esc(c)}` : '–'}</td><td class="myr">${c === 'MYR' ? '<span class="dim">same</span>' : m == null ? '–' : 'RM ' + px(m)}</td>`);
+    }
+  }
+}
+const curName = c => { try { return new Intl.DisplayNames(['en'], { type: 'currency' }).of(c); } catch { return c; } };
+VIEWS.fx = async (_, main) => {
+  if (!LIVE) await loadLive().catch(() => {});  // opened directly: wait for the live rates
+  const A = { ...(D.fx || {}) }, X = { ...(LIVE?.fx2 || {}) }, chg = LIVE?.fxc || {};
+  let fresh = '';
+  try {  // Coinbase straight from the browser, so source B is current whenever this tab is open
+    const r = await (await fetch('https://api.coinbase.com/v2/exchange-rates?currency=USD', { cache: 'no-store' })).json();
+    for (const c of Object.keys(A)) if (r?.data?.rates?.[c]) X[c] = +r.data.rates[c];
+    if (r?.data?.rates?.MYR) { X.MYR = +r.data.rates.MYR; fresh = new Date().toISOString(); }
+  } catch {}
+  const rm = (fx, c) => fx.MYR && fx[c] ? fx.MYR / fx[c] : null;
+  const U = await universe(), used = {}; for (const r of U) used[r.cur] = (used[r.cur] || 0) + 1;
+  const list = Object.keys(A).filter(c => c !== 'GBp' && c !== 'MYR').sort((a, b) => (used[b] || 0) - (used[a] || 0) || a.localeCompare(b));
+  const ageMin = LIVE?.at ? (Date.now() - Date.parse(LIVE.at)) / 60000 : Infinity;
+  main.innerHTML = `<div class="grid wide">
+    ${panel('Every currency on the site, in ringgit', `<div class="tw"><table><thead><tr><th class="l">Currency</th><th class="l">Name</th><th>1 unit = RM (Yahoo)</th><th>1 unit = RM (Coinbase)</th><th title="Gap between the two sources">Check</th><th>1D</th><th>RM 100 =</th><th>Stocks priced in it</th></tr></thead><tbody>
+      ${list.map(c => { const a = rm(A, c), b = rm(X, c), d = a && b ? b / a - 1 : null, ch = chg[c] != null && chg.MYR != null ? (1 + chg.MYR) / (1 + chg[c]) - 1 : null;
+        return `<tr><td class="l"><b>${esc(CUR_SYM[c] || '')}</b> ${esc(c)}</td><td class="l nm">${esc(curName(c))}</td><td>${a ? 'RM ' + a.toFixed(a < 0.01 ? 6 : 4) : '–'}</td><td>${b ? 'RM ' + b.toFixed(b < 0.01 ? 6 : 4) : '–'}</td>
+          <td class="${d == null ? 'flat' : Math.abs(d) > .005 ? 'down' : 'up'}">${d == null ? '–' : Math.abs(d) > .005 ? `⚠ ${(d * 100).toFixed(2)}%` : `✓ ${(d * 100).toFixed(2)}%`}</td><td>${pct(ch)}</td>
+          <td>${a ? `${esc(CUR_SYM[c] || '')} ${(100 / a).toLocaleString('en-US', { maximumFractionDigits: 100 / a > 1000 ? 0 : 2 })}` : '–'}</td><td>${(used[c] || 0).toLocaleString()}</td></tr>`; }).join('')}
+      <tr><td class="l"><b>p</b> GBp</td><td class="l nm">UK pence (London prices)</td><td>${rm(A, 'GBP') ? 'RM ' + (rm(A, 'GBP') / 100).toFixed(4) : '–'}</td><td>${rm(X, 'GBP') ? 'RM ' + (rm(X, 'GBP') / 100).toFixed(4) : '–'}</td><td></td><td></td><td></td><td>${(used.GBp || 0).toLocaleString()}</td></tr></tbody></table></div>
+      <p class="pb note">✓ = the two sources agree within 0.5%; ⚠ = check before relying on it. 1D = change of the ringgit value of one unit (green: that currency got dearer in ringgit).</p>`, '', 'span')}
+    ${panel('Converter', `<form class="pb row" id="fxF"><input class="f" id="fxA" inputmode="decimal" value="1" style="width:120px" aria-label="Amount"><select class="f" id="fxC">${list.map(c => `<option ${c === 'USD' ? 'selected' : ''}>${c}</option>`).join('')}</select><span>=</span><b id="fxR" class="big"></b></form>`)}
+    ${panel('Sources and update times', `<div class="pb"><p><b>A · Yahoo Finance</b> currency pairs (XXX=X, mid-market). Refreshed by the live job about every 10 minutes${LIVE?.at ? `; last update <b>${esc(sgt(LIVE.at))} SGT</b>` : ''}. The daily snapshot (${esc(sgt(D.summary.at))} SGT) is the fallback.</p>
+      <p><b>B · Coinbase exchange-rate API</b> (api.coinbase.com, mid-market, aggregated from several FX providers). Saved by the same job and fetched again by your browser whenever this tab opens${fresh ? `; fetched <b>${esc(sgt(fresh))} SGT</b>` : ' (browser fetch failed; showing the saved copy)'}.</p>
+      <p>${ageMin > 60 ? `<span class="down">⚠ Source A is ${Math.round(ageMin)} minutes old: GitHub's schedule has stalled. Tap ⟳ (with GitHub sync connected) to refresh, or rely on source B.</span>` : '<span class="up">Rates are less than an hour old.</span>'}</p>
+      <p class="note">Official reference: <a href="https://www.bnm.gov.my/exchange-rates" target="_blank" rel="noopener">Bank Negara Malaysia exchange rates ↗</a>. Banks and brokers add a spread of roughly 0.5–2% on top of mid-market rates, so your broker's conversion will be a little worse. Ringgit columns in the tables use source A.</p></div>`)}
+  </div>`;
+  const calc = () => { const a = parseFloat($('#fxA').value) || 0, c = $('#fxC').value, r1 = rm(A, c), r2 = rm(X, c);
+    $('#fxR').innerHTML = r1 ? `RM ${money(a * r1)} <small class="note">(Coinbase: RM ${r2 ? money(a * r2) : '–'})</small>` : '–'; };
+  $('#fxA').oninput = calc; $('#fxC').onchange = calc; $('#fxF').onsubmit = e => e.preventDefault(); calc();
+};
+
 VIEWS.glossary = async (_, main) => {
   const q = store.get('gq', ''), lvl = store.get('gl', 'ALL');
   main.innerHTML = `<div class="row" style="margin-bottom:10px"><input class="f sp" id="gq" placeholder="Search ${GLOSSARY.length} terms" value="${esc(q)}">

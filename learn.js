@@ -653,6 +653,7 @@ export const FAQ = [
   ['Why does tapping a sector show fewer stocks?', 'The dashboard shows every stock so you see the whole market; tapping a sector, industry or "Shariah ›" shows only the C and P stocks.'],
   ['Are the outlooks predictions?', 'They are statistics: how often prices rose after the same trend score in the last two years, with a 68% range. They are often wrong and are not advice.'],
   ['Is my data private?', 'Everything is encrypted with the family password before it is stored, but the repository is public, so use a long password. Profile PINs stop casual switching only.'],
+  ['Which currency is a price in, and what is it in ringgit?', 'Every stock table has a Cur column (US$ USD, S$ SGD, RM MYR…) and a ≈ RM column with the same price converted to ringgit. The Currency tab lists every currency the site uses, converted to RM from two sources (Yahoo Finance and Coinbase) so you can see they agree, with a converter. Rates refresh about every 10 minutes; your broker will charge a small spread on top.'],
   ['Does Paper trading use real money?', 'No. It is virtual money (default S$1,500) with realistic fees and board lots, to practise.'],
   ['How do I get notifications?', 'Settings → Notifications on this device. On iPhone, add the site to the Home Screen first.'],
   ['Can I trade from here?', 'No. Use moomoo, Malacca Securities (M+) or UOB Kay Hian. The site links to each stock\'s page there.'],

@@ -307,3 +307,5 @@ table.wrap td { white-space: normal; min-width: 140px; vertical-align: top; }
 .si .nm { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .si .sp { font-size: 12px; white-space: nowrap; }
 .si.none { display: block; color: var(--muted); cursor: default; }
 @media (max-width: 760px) { .si { grid-template-columns: auto auto auto minmax(0, 1fr) auto; } .si .sp { display: none; } }
+td.cur { white-space: nowrap; color: var(--muted); } td.cur b { color: var(--text); font-weight: 600; }
+td.myr { white-space: nowrap; color: var(--amber2); }
