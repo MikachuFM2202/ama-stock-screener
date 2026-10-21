@@ -161,7 +161,7 @@ def sp_funds():
                 if not re.fullmatch(r'[A-Z]{1,5}([./][A-Z])?', t): continue  # cash and sukuk lines
                 y = t.replace('/', '-').replace('.', '-')
             elif parts[1] in BBG:
-                code = parts[0]
+                code = parts[0].replace('/', '-')
                 if parts[1] == 'HK': code = code.zfill(4)
                 y = code + BBG[parts[1]]
             else: continue
@@ -685,7 +685,8 @@ def main():
             r['inv'] = round(100 * (.3 * trend[i] + .2 * mom[i] + .3 * qual[i] + .2 * val[i]))
             atr = r.get('atr') or 0
             r['day'] = round(100 * (.4 * liq[i] + .25 * (1 if .02 <= atr <= .07 else .4) + .2 * min((r.get('rv') or 0) / 2, 1) + .15 * trend[i]))
-        ideas[f'{mk}-invest'] = sorted([r for r in pool if (r['score'] or 0) > 0], key=lambda r: -r['inv'])[:15]
+        # Uptrends first; in a falling market the list still fills, with the downtrend names flagged by their bias.
+        ideas[f'{mk}-invest'] = sorted(pool, key=lambda r: ((r['score'] or 0) > 0, r['inv']), reverse=True)[:15]
         ideas[f'{mk}-day'] = sorted(pool, key=lambda r: -r['day'])[:15]
         movers[f'{mk}-up'] = sorted(pool, key=lambda r: -(r['r1'] or 0))[:10]
         movers[f'{mk}-down'] = sorted(pool, key=lambda r: (r['r1'] or 0))[:10]
