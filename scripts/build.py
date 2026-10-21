@@ -64,14 +64,20 @@ def get(name, default=None):
 
 
 def cache_get(name, default=None):
-    try: return json.loads((OUT / 'cache' / name).read_text())
+    """Caches are encrypted like everything else: fund/alerts data includes family watchlist symbols."""
+    stem = name.rsplit('.', 1)[0]
+    v = get(f'cache/{stem}.bin')
+    if v is not None: return v
+    try: v = json.loads((OUT / 'cache' / name).read_text())  # plaintext cache from before 2026-10-21: encrypt it now
     except Exception: return default
+    cache_put(name, v)
+    return v
 
 
 def cache_put(name, obj):
-    p = OUT / 'cache' / name
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(clean(obj), separators=(',', ':')))
+    stem = name.rsplit('.', 1)[0]
+    put(f'cache/{stem}.bin', obj)
+    (OUT / 'cache' / name).unlink(missing_ok=True)
 
 
 def clean(o):
@@ -441,6 +447,113 @@ def media(old):
     return {'pods': pods, 'vids': vids}
 
 
+# ---------------------------------------------------------------- small-account strategies (scan + backtest)
+# Three well-documented long-only swing setups that suit a small cash account (no margin, no shorting): entries at
+# the next day's open, exits by rule. The backtest replays each rule over the last ~2 years for every compliant
+# stock, one trade at a time per stock. Returns are gross; the site subtracts each person's broker fees.
+STRATS = {
+    'rsi2': 'RSI(2) dip in an uptrend (Connors): close > 200-day average and 2-day RSI < 10. Exit on the first close above the 5-day average, or after 7 days; stop 2.5 ATR.',
+    'brk': '20-day breakout on volume: close above the prior 20-day high on 1.5x average volume, 50-day > 200-day. Exit on a close below the 10-day average or after 10 days; stop 1.5 ATR.',
+    'pull': 'Pullback to the rising 20-day EMA: uptrend (50 > 200-day), the day dips to the EMA and closes green above it. Stop under the 3-day low, target 2R, max 10 days.',
+}
+
+
+def _wilder(x, n):
+    return x.ewm(alpha=1 / n, min_periods=n).mean()
+
+
+def strategy_scan(P, meta):
+    """meta: {sym: {m, st, cur, n, val}}. Returns (signals today, {strategy: {market: [returns...]}})."""
+    rets = {k: {} for k in STRATS}
+    sig_today = []
+    for s, mt in meta.items():
+        try:
+            df = pd.DataFrame({k: P[k][s] for k in ('Open', 'High', 'Low', 'Close', 'Volume')}).dropna(subset=['Open', 'High', 'Low', 'Close'])
+        except KeyError:
+            continue
+        df = df[(df['Volume'].fillna(0) > 0) | (df.index == df.index[-1])] if mt['m'] != 'ETF' else df
+        if len(df) < 220: continue
+        cs = df['Close']
+        o, h, l, c, v = (df[k].to_numpy(float) for k in ('Open', 'High', 'Low', 'Close', 'Volume'))
+        sma5, sma10, sma50, sma200 = (cs.rolling(n).mean().to_numpy() for n in (5, 10, 50, 200))
+        ema20 = cs.ewm(span=20, adjust=False).mean().to_numpy()
+        d = cs.diff()
+        rsi2 = (100 - 100 / (1 + _wilder(d.clip(lower=0), 2) / _wilder(-d.clip(upper=0), 2).replace(0, np.nan))).fillna(100).to_numpy()
+        tr = pd.concat([df['High'] - df['Low'], (df['High'] - cs.shift()).abs(), (df['Low'] - cs.shift()).abs()], axis=1).max(axis=1)
+        atr = _wilder(tr, 14).to_numpy()
+        hi20 = df['High'].shift(1).rolling(20).max().to_numpy()
+        av20 = df['Volume'].shift(1).rolling(20).mean().to_numpy()
+        with np.errstate(invalid='ignore'):
+            sigs = {
+                'rsi2': (c > sma200) & (rsi2 < 10),
+                'brk': (c > hi20) & (v > 1.5 * av20) & (c > sma50) & (sma50 > sma200),
+                'pull': (sma50 > sma200) & (c > sma50) & (l <= ema20 * 1.005) & (c > ema20) & (c > o) & (c < ema20 * 1.03),
+            }
+        last = len(c) - 1
+        for k, m in sigs.items():
+            busy = -1
+            for i in np.flatnonzero(m):
+                if not np.isfinite(atr[i]) or atr[i] <= 0: continue
+                if i == last:
+                    stop = c[i] - (2.5 if k == 'rsi2' else 1.5) * atr[i] if k != 'pull' else min(l[max(0, i - 2):i + 1]) - 0.2 * atr[i]
+                    sig_today.append({'s': s, 'k': k, 'm': mt['m'], 'st': mt['st'], 'n': mt['n'], 'cur': mt['cur'], 'px': c[i], 'stop': stop,
+                                      'tgt': c[i] + 2 * (c[i] - stop) if k == 'pull' else None, 'atr': atr[i] / c[i], 'rsi2': rsi2[i], 'val': mt['val'],
+                                      'd': df.index[i].date().isoformat()})
+                    continue
+                if i <= busy: continue  # one trade at a time per stock
+                e = o[i + 1]
+                if not e > 0: continue
+                stop = e - 2.5 * atr[i] if k == 'rsi2' else e - 1.5 * atr[i] if k == 'brk' else min(l[max(0, i - 2):i + 1]) - 0.2 * atr[i]
+                if stop >= e: continue
+                tgt = e + 2 * (e - stop) if k == 'pull' else None
+                hold = 7 if k == 'rsi2' else 10
+                x, j = None, i + 1
+                for j in range(i + 1, min(i + 1 + hold, last + 1)):
+                    if l[j] <= stop: x = min(o[j], stop) if j > i + 1 else stop; break  # stop first: the conservative assumption
+                    if tgt and h[j] >= tgt: x = max(o[j], tgt) if j > i + 1 else tgt; break
+                    if k == 'rsi2' and c[j] > sma5[j]: x = c[j]; break
+                    if k == 'brk' and c[j] < sma10[j]: x = c[j]; break
+                if x is None:
+                    if j >= last and j - i < hold: continue  # still open at the end of the data: not a finished trade
+                    x = c[j]
+                busy = j
+                rets[k].setdefault(mt['m'], []).append(round(x / e - 1, 4))
+    return sig_today, rets
+
+
+def strategy_stats(rets):
+    out = {}
+    for k, by in rets.items():
+        out[k] = {}
+        for m, r in by.items():
+            a = np.array(r)
+            if len(a) < 10: continue
+            g, ls = a[a > 0].sum(), -a[a < 0].sum()
+            out[k][m] = {'n': len(a), 'win': float((a > 0).mean()), 'avg': float(a.mean()), 'med': float(np.median(a)),
+                         'pf': float(g / ls) if ls else None, 'r': [float(x) for x in a[-3000:]]}
+    return out
+
+
+def weekly_max(syms):
+    """Weekly bars over each symbol's full history, for the chart's 5Y/MAX views. Refreshed on the weekly run."""
+    n = 0
+    for i in range(0, len(syms), 100):
+        chunk = syms[i:i + 100]
+        try: d = yf.download(chunk, period='max', interval='1wk', auto_adjust=True, progress=False, threads=True, group_by='column')
+        except Exception as e: print('weekly max', e); continue
+        if not isinstance(d.columns, pd.MultiIndex): d.columns = pd.MultiIndex.from_product([d.columns, chunk])
+        d.index = pd.to_datetime(d.index).tz_localize(None)
+        for s in chunk:
+            try: f = pd.DataFrame({k: d[k][s] for k in ('Open', 'High', 'Low', 'Close', 'Volume')}).dropna(subset=['Close'])
+            except KeyError: continue
+            if len(f) < 60: continue
+            sig = lambda col: [float(f'{x:.5g}') if np.isfinite(x) else None for x in f[col].to_numpy(float)]
+            put(f'ohlcw/{fname(s)}.bin', {'t': [int(t.timestamp()) for t in f.index], 'o': sig('Open'), 'h': sig('High'), 'l': sig('Low'), 'c': sig('Close'),
+                                          'v': [int(x) if np.isfinite(x) else 0 for x in f['Volume'].to_numpy(float)]})
+            n += 1
+    print('weekly max files', n)
+
+
 # ---------------------------------------------------------------- AI reports
 
 def llm(system, user, max_tokens=2500):
@@ -648,10 +761,13 @@ def family_symbols(profs):
         for w in alive(st.get('wl')): syms.setdefault(w['s'], w.get('n') or w['s'])
         for s in positions(st): syms.setdefault(s, s)
         for o in open_orders(st): syms.setdefault(o['s'], o['s'])
+        for x in alive(st.get('quick')):
+            if x.get('status') in ('planned', 'open'): syms.setdefault(x['s'], x['s'])
     return syms
 
 
 def write_push(jobs):
+    jobs = [dict(j, subs=alive(j['subs'])) for j in jobs]  # devices turned off or moved to another profile are tombstoned
     jobs = [j for j in jobs if j['subs'] and j['msgs']]
     if jobs: Path(os.environ.get('PUSH_OUT', 'push.json')).write_text(json.dumps({'jobs': jobs}))
 
@@ -788,6 +904,16 @@ def main():
                'calendar': calendar(), 'earnings': earnings, 'news': news([by[w['s']] for w in wl if w['s'] in by] + [{'s': w['s'], 'n': w['s']} for w in wl if w['s'] not in by]),
                'media': media(old.get('media')), 'reports': old.get('reports', []), 'fx': fx}
 
+    # Small-account strategies: compliant, liquid stocks plus the US-listed Shariah ETFs.
+    meta = {r['s']: {'m': r['m'], 'st': r['st'], 'cur': r['cur'], 'n': r['n'], 'val': r.get('valusd')} for r in rows
+            if r['st'] in ('C', 'P') and (r.get('valusd') or 0) > (3e5 if r['m'] in ('MY', 'SG') else 2e6)}
+    meta.update({s: {'m': 'ETF', 'st': 'C', 'cur': 'USD', 'n': n, 'val': None} for s, n in MACRO['Shariah ETFs'] if not s.endswith('.L') and s in have})
+    sigs, rets = strategy_scan(P, meta)
+    summary['quick'] = {'at': NOW.isoformat(), 'strats': STRATS, 'signals': sigs, 'stats': strategy_stats(rets)}
+    print('strategies', len(sigs), 'signals today', {k: sum(len(v) for v in r.values()) for k, r in rets.items()}, 'backtest trades')
+    if MODE == 'weekly' or not (OUT / 'ohlcw').exists():
+        weekly_max([s for s in have if not (s.endswith('=X') and s not in macro_syms)])
+
     if MODE in ('daily', 'weekly'):
         rep = write_report(MODE, summary, rows, wl)
         put(f'reports/{rep["id"]}.bin', rep)
@@ -855,7 +981,8 @@ def alerts(p, st, q, sent, today):
         for o in open_orders(st):
             x = q.get(o['s'])
             if not x or not o.get('px'): continue
-            hi, lo = x.get('h') or x['p'], x.get('l') or x['p']
+            later = x.get('d') and x['d'] > (o.get('d0') or o.get('at', '')[:10])  # same day: only the current price counts
+            hi, lo = (x.get('h') or x['p'], x.get('l') or x['p']) if later else (x['p'], x['p'])
             hit = (o['side'] == 'buy' and (lo <= o['px'] if o['type'] == 'limit' else hi >= o['px'])) or \
                   (o['side'] == 'sell' and (hi >= o['px'] if o['type'] == 'limit' else lo <= o['px']))
             if hit and once(f'order:{o["id"]}'):

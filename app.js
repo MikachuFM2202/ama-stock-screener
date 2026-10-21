@@ -100,10 +100,10 @@ async function saveVault(next) {
 
 // ---------------------------------------------------------------- profiles
 const COLORS = ['#ffa028', '#2bd96b', '#5fb4ff', '#c38cff', '#ff6b9d', '#3fd0d0', '#ffe14d', '#ff4d4d'];
-const DEF_PREFS = { home: 'mkt', mkt: 'US', risk: 1, acct: 20000, move: 5, ticker: true, shariahOnly: true,
+const DEF_PREFS = { home: 'mkt', mkt: 'US', risk: 1.5, acct: 1500, move: 5, ticker: true, shariahOnly: true,
   notify: { daily: true, weekly: true, alerts: true, moves: true, orders: true, breaking: false } };
 const now = () => new Date().toISOString();
-const blank = () => ({ v: 2, at: 0, wl: [], notes: {}, journal: [], later: [], subs: [], prefs: structuredClone(DEF_PREFS), paper: PT.newAccount() });
+const blank = () => ({ v: 2, at: 0, wl: [], notes: {}, journal: [], later: [], quick: [], subs: [], prefs: structuredClone(DEF_PREFS), paper: PT.newAccount() });
 let FAMILY = store.get('family', { list: [], at: 0 });
 let ME = null, ST = blank();
 const people = () => FAMILY.list.filter(p => !p.del);
@@ -127,8 +127,14 @@ function mergeState(a, b) {
   const notes = { ...o.notes };
   for (const [k, v] of Object.entries(n.notes || {})) if (!notes[k] || (v.u || '') >= (notes[k].u || '')) notes[k] = v;
   const op = o.paper || PT.newAccount(), np = n.paper || PT.newAccount();
-  return { ...blank(), ...o, ...n, notes, wl: PT.mergeList(o.wl, n.wl, 's'), later: PT.mergeList(o.later, n.later), journal: PT.mergeList(o.journal, n.journal),
+  return { ...blank(), ...o, ...n, notes, wl: PT.mergeList(o.wl, n.wl, 's'), later: PT.mergeList(o.later, n.later), journal: PT.mergeList(o.journal, n.journal), quick: PT.mergeList(o.quick, n.quick),
     subs: PT.mergeList(o.subs, n.subs, 'endpoint'), paper: { ...op, ...np, trades: PT.mergeList(op.trades, np.trades), orders: PT.mergeList(op.orders, np.orders), eq: PT.mergeList(op.eq, np.eq, 'd') } };
+}
+// Copies a merged state into the existing ST / ST.paper objects. Views hold references to them (the paper ticket,
+// watchlist inputs), so replacing the objects would make later edits land on a stale copy and be lost.
+function adopt(m) {
+  const paper = Object.assign(ST.paper, m.paper);
+  Object.assign(ST, m, { paper });
 }
 async function loadMe(id) {
   ME = people().find(p => p.id === id) || null;
@@ -150,7 +156,7 @@ function saveState() {
     try {
       const remote = await readData(`p/${id}.bin`).catch(() => null);
       const merged = mergeState(remote, ST);
-      if (ME?.id === id) { ST = merged; store.set(`st:${id}`, ST); }
+      if (ME?.id === id) { adopt(merged); store.set(`st:${id}`, ST); }
       await putData(`p/${id}.bin`, await seal(merged), `profile ${id}: update`);
       syncMsg = `Synced ${new Date().toLocaleTimeString('en-SG', { hour: '2-digit', minute: '2-digit' })}`;
     } catch (e) { syncMsg = `Sync failed (${e.message}). Kept on this device; will retry on the next change.`; toast(syncMsg); }
@@ -226,6 +232,7 @@ let LIVE = null, liveFrom = '';
 function liveSyms() {
   const s = new Set(Object.values(D.summary.macro).flat().map(r => r.s));
   wlItems().forEach(w => s.add(w.s));
+  (ST.quick || []).filter(x => !x.del && ['planned', 'open'].includes(x.status)).forEach(x => s.add(x.s));
   Object.keys(PT.holdings(ST.paper).pos).forEach(x => s.add(x));
   ST.paper.orders.filter(o => o.status === 'open').forEach(o => s.add(o.s));
   const [v, a] = location.hash.slice(1).split('/');
@@ -373,10 +380,10 @@ function mooCode(s) {
 
 // ---------------------------------------------------------------- shell
 // ---------------------------------------------------------------- shell
-const TABS = [['mkt', 'MKT', 'Market'], ['brief', 'BRF', 'Reports'], ['ideas', 'IDEA', 'Ideas'], ['screen', 'SCRN', 'Screener'],
+const TABS = [['mkt', 'MKT', 'Market'], ['brief', 'BRF', 'Reports'], ['quick', 'SMLL', 'Small account'], ['ideas', 'IDEA', 'Ideas'], ['screen', 'SCRN', 'Screener'],
   ['wl', 'WL', 'Watchlist'], ['paper', 'PAPR', 'Paper'], ['notes', 'NOTE', 'Notes'], ['news', 'NEWS', 'News'],
   ['media', 'TV', 'Watch'], ['learn', 'EDU', 'Learn'], ['glossary', 'GLOS', 'Terms'], ['settings', 'SET', 'Settings']];
-const BNAV = ['mkt', 'ideas', 'wl', 'paper'];
+const BNAV = ['mkt', 'quick', 'wl', 'paper'];
 let cleanup = [], lastDispatch = 0, fastPoll = 0;
 function shell() {
   $('#tabs').innerHTML = TABS.map(([id, k, n]) => `<a href="#${id}" data-tab="${id}"><b>${k}</b>${n}</a>`).join('');
@@ -419,7 +426,7 @@ let lastTouch = 0;
 // swapping the DOM mid-tap eats the tap.
 function softRoute() {
   const v = location.hash.slice(1).split('/')[0] || P().home;
-  if (!['mkt', 'wl', 'paper', 'ideas', 'screen'].includes(v)) return;
+  if (!['mkt', 'wl', 'paper', 'ideas', 'screen', 'quick'].includes(v)) return;
   if (typing() || Date.now() - lastTouch < 2500) { clearTimeout(softRoute.t); softRoute.t = setTimeout(softRoute, 2500); return; }
   route(true);
 }
@@ -444,6 +451,7 @@ async function refreshNow() {
 async function refreshMeta(force = false) {
   try {
     const m = await (await fetch(`${RAW}market/meta.json?_=${Date.now()}`, { cache: 'no-store' })).json();
+    if (m.salt !== META.salt) { store.del('k'); store.set('meta', m); toast('The family password was changed. Please unlock again.'); setTimeout(() => location.reload(), 1500); return; }
     if (m.at !== META.at || force) {
       const fresh = m.at !== META.at;
       META = m; store.set('meta', m);
@@ -636,7 +644,8 @@ function techRead(r) {
   if (r.hi52 && r.px >= r.hi52 * .97) t.push('Trading near its 52-week high.');
   return t.join(' ');
 }
-function drawChart(b, r) {
+let chartApi = null, chartCleanup = null;
+function drawChart(b, r, weekly = false) {
   const LW = window.LightweightCharts, el = $('#ch');
   const chart = LW.createChart(el, {
     autoSize: true, layout: { background: { color: '#000' }, textColor: '#8c8c8c', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11 },
@@ -644,7 +653,8 @@ function drawChart(b, r) {
     rightPriceScale: { borderColor: '#2a2a2a', scaleMargins: { top: .05, bottom: .32 } }, timeScale: { borderColor: '#2a2a2a', rightOffset: 4 },
     localization: { priceFormatter: px },
   });
-  cleanup.push(() => chart.remove());
+  chartCleanup = () => { chart.remove(); chartApi = null; };
+  cleanup.push(chartCleanup);
   const n = b.t.length, data = [];
   for (let i = 0; i < n; i++) if (b.c[i] != null && b.o[i] != null) data.push({ time: b.t[i], open: b.o[i], high: b.h[i] ?? b.c[i], low: b.l[i] ?? b.c[i], close: b.c[i] });
   const cs = chart.addCandlestickSeries({ upColor: '#2bd96b', downColor: '#ff4d4d', borderVisible: false, wickUpColor: '#2bd96b', wickDownColor: '#ff4d4d' });
@@ -658,7 +668,7 @@ function drawChart(b, r) {
     closes.forEach((c, i) => { sum += c; if (i >= p) sum -= closes[i - p]; if (i >= p - 1) out.push({ time: data[i].time, value: sum / p }); });
     chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }).setData(out);
   };
-  sma(20, '#ffe14d'); sma(50, '#5fb4ff'); sma(200, '#c38cff');
+  if (weekly) { sma(10, '#5fb4ff'); sma(40, '#c38cff'); } else { sma(20, '#ffe14d'); sma(50, '#5fb4ff'); sma(200, '#c38cff'); }
   // RSI(14), Wilder smoothing, on its own scale at the bottom.
   const rsi = []; let ag = 0, al = 0;
   for (let i = 1; i < closes.length; i++) {
@@ -674,7 +684,7 @@ function drawChart(b, r) {
   // Forecast cone: trading days ahead, skipping weekends.
   const last = data[data.length - 1];
   const ahead = k => { let t = last.time; for (let i = 0; i < k;) { t += 86400; const wd = new Date(t * 1000).getUTCDay(); if (wd && wd !== 6) i++; } return t; };
-  const pts = [[5], [21], [63]].map(([h]) => [h, r.fc?.[h] || r.fc?.[String(h)]]).filter(x => x[1]);
+  const pts = weekly ? [] : [[5], [21], [63]].map(([h]) => [h, r.fc?.[h] || r.fc?.[String(h)]]).filter(x => x[1]);
   // Empty bars for each future trading day, so the cone gets real width instead of three squeezed slots.
   if (pts.length) chart.addLineSeries({ lastValueVisible: false, priceLineVisible: false }).setData(Array.from({ length: pts[pts.length - 1][0] }, (_, i) => ({ time: ahead(i + 1) })));
   if (pts.length) for (const [k, c] of [['lo', '#ffa02899'], ['mid', '#ffa028'], ['hi', '#ffa02899']]) {
@@ -686,13 +696,14 @@ function drawChart(b, r) {
     const d = p.time && p.seriesData.get(cs);
     lg.innerHTML = d ? `${new Date(p.time * 1000).toISOString().slice(0, 10)} O ${px(d.open)} H ${px(d.high)} L ${px(d.low)} C <b style="color:${d.close >= d.open ? '#2bd96b' : '#ff4d4d'}">${px(d.close)}</b>` : '';
   });
-  const setRange = k => {
-    const days = { '3M': 92, '6M': 183, '1Y': 366, '2Y': 740 }[k];
-    chart.timeScale().setVisibleRange({ from: last.time - days * 86400, to: pts.length ? ahead(pts[pts.length - 1][0]) : last.time });
-    $$('#rng [data-r]').forEach(b => b.classList.toggle('on', b.dataset.r === k));
+  chartApi = {
+    remove: chartCleanup,
+    range: k => {
+      if (k === 'MAX') return chart.timeScale().fitContent();
+      const days = { '3M': 92, '6M': 183, '1Y': 366, '2Y': 740, '5Y': 1830 }[k];
+      chart.timeScale().setVisibleRange({ from: Math.max(data[0].time, last.time - days * 86400), to: pts.length ? ahead(pts[pts.length - 1][0]) : last.time });
+    },
   };
-  $$('#rng [data-r]').forEach(bt => bt.onclick = () => setRange(bt.dataset.r));
-  setRange('6M');
 }
 
 VIEWS.news = async (_, main) => {
@@ -806,10 +817,10 @@ VIEWS.stock = async (s, main) => {
       <span class="px mono">${px(r.px)}</span><span>${pct(r.r1)} today</span><span class="note">${esc(r.cur || '')} · ${r.live ? 'live' : 'close'} ${esc(r.d || '')}</span>
       ${isEq ? `<a class="btn sm" href="#paper/${encodeURIComponent(s)}">PAPER TRADE</a>` : ''}</div>
     <div class="grid wide">
-      <section class="panel span"><div class="ph"><h2>Chart</h2><div class="chips" id="rng">${['3M', '6M', '1Y', '2Y'].map(k => `<button class="chip ${k === '6M' ? 'on' : ''}" data-r="${k}">${k}</button>`).join('')}
+      <section class="panel span"><div class="ph"><h2>Chart</h2><div class="chips" id="rng">${['3M', '6M', '1Y', '2Y', '5Y', 'MAX'].map(k => `<button class="chip ${k === '6M' ? 'on' : ''}" data-r="${k}">${k}</button>`).join('')}
         <button class="chip" id="tvBtn" title="Live intraday chart from TradingView">LIVE (TradingView)</button></div></div>
         <div class="chart" id="ch"><div class="legend" id="lg"></div></div><div class="tv" id="tv" hidden></div>
-        <div class="pb note">Candles daily · <span style="color:#ffe14d">SMA20</span> · <span style="color:#5fb4ff">SMA50</span> · <span style="color:#c38cff">SMA200</span> · volume · RSI(14) at the bottom · dashed amber = statistical 68% range for ~1W/1M/3M ahead.</div></section>
+        <div class="pb note">3M–2Y: daily candles · <span style="color:#ffe14d">SMA20</span> · <span style="color:#5fb4ff">SMA50</span> · <span style="color:#c38cff">SMA200</span> · dashed amber = statistical 68% range for ~1W/1M/3M ahead. 5Y/MAX: weekly candles over the full listed history · <span style="color:#5fb4ff">10-week</span> · <span style="color:#c38cff">40-week</span> averages. Volume and RSI(14) at the bottom. For intraday timeframes use LIVE (TradingView).</div></section>
       ${panel(`My notes on ${esc(s)}`, `<div class="pb"><textarea class="f" id="note" rows="4" placeholder="Thesis, entry plan, what would make me sell, things to check in the next results…">${esc(note)}</textarea>
         <p class="note" id="noteMsg">${ST.notes[s]?.u ? `Saved ${esc(sgt(ST.notes[s].u))}` : 'Saves as you type. All your notes are in the NOTE tab.'}</p></div>`)}
       ${isEq ? panel('Position size (risk-based)', `<div class="pb"><div class="form" id="ps">
@@ -847,14 +858,129 @@ VIEWS.stock = async (s, main) => {
     $('#psOut').innerHTML = `Buy <b>${sh.toLocaleString()}</b> shares${lot > 1 ? ` (${sh / lot} lots)` : ''} · position ${money(sh * v('entry'))} ${esc(r.cur || '')} · max loss ≈ ${money(sh * per)} (${v('risk')}% of account) · reward at 2R: ${px(v('entry') + 2 * per)}`;
   };
   $$('#ps input').forEach(i => i.oninput = ps); ps();
-  const bars = await mk(`ohlc/${s.replace(/[^A-Za-z0-9.-]/g, '_')}.bin`).catch(() => null);
-  if (!bars || !window.LightweightCharts) { $('#ch').innerHTML = '<p class="pb muted">Chart data unavailable.</p>'; return; }
-  drawChart(bars, r);
+  const file = s.replace(/[^A-Za-z0-9.-]/g, '_');
+  const bars = await mk(`ohlc/${file}.bin`).catch(() => null);
+  if (!bars || !window.LightweightCharts) { $('#ch').innerHTML = '<div class="legend" id="lg"></div><p class="pb muted">Chart data unavailable.</p>'; return; }
+  // Daily bars cover ~2 years; 5Y and MAX switch to weekly bars over the full listed history.
+  let mode = 'd';
+  const show = async k => {
+    const want = ['5Y', 'MAX'].includes(k) ? 'w' : 'd';
+    if (want !== mode || !chartApi) {
+      let data = bars;
+      if (want === 'w') data = await mk(`ohlcw/${file}.bin`).catch(() => null);
+      if (!data) { toast('Long history not available yet (it is built on the Sunday run).'); return; }
+      chartApi?.remove(); cleanup = cleanup.filter(f => f !== chartCleanup);
+      $('#ch').innerHTML = '<div class="legend" id="lg"></div>';
+      drawChart(data, r, want === 'w'); mode = want;
+    }
+    chartApi.range(k);
+    $$('#rng [data-r]').forEach(b => b.classList.toggle('on', b.dataset.r === k));
+  };
+  $$('#rng [data-r]').forEach(bt => bt.onclick = () => show(bt.dataset.r));
+  await show('6M');
   $('#tvBtn').onclick = () => {
     const tv = $('#tv'), on = tv.hidden;
     tv.hidden = !on; $('#ch').hidden = on; $('#tvBtn').classList.toggle('on', on);
     if (on && !tv.firstChild) tv.innerHTML = `<iframe title="TradingView chart" style="width:100%;height:100%;border:0" src="https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(tvSym(s))}&interval=D&theme=dark&style=1&timezone=Asia%2FSingapore&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=1&studies=%5B%5D&locale=en"></iframe>`;
   };
+};
+
+// ---------------------------------------------------------------- small account: strategies, fee-aware sizing, quick list
+// Fee presets (per side, in the market's currency): max(minimum, % of value) + exchange/clearing/stamp extras.
+// Sources (Oct 2026, third-party summaries; check your broker's current page): moomoo SG US$0.99/order platform fee and
+// no commission; M+ Online 0.08% min RM8 + clearing 0.03% + stamp duty ~0.1%; UOB Kay Hian cash account 0.275% min S$25.
+const FEE_PRESETS = {
+  US: { label: 'moomoo (US)', cur: 'USD', min: 0.99, pct: 0, add: 0.003 },
+  ETF: { label: 'moomoo (US ETFs)', cur: 'USD', min: 0.99, pct: 0, add: 0.003 },
+  MY: { label: 'M+ Online (Bursa)', cur: 'MYR', min: 8, pct: 0.08, add: 0.13 },
+  SG: { label: 'moomoo SG (SGX)', cur: 'SGD', min: 0.99, pct: 0.03, add: 0.04 },
+  SGU: { label: 'UOB Kay Hian cash (SGX)', cur: 'SGD', min: 25, pct: 0.275, add: 0.04 },
+  GL: { label: 'moomoo (other markets, estimate)', cur: 'USD', min: 3, pct: 0.03, add: 0.05 },
+};
+const SMALL_DEF = { cap: 1500, maxPos: 2, risk: 1.5, sgBroker: 'SG', fees: {} };
+const SMALL = () => ({ ...SMALL_DEF, ...(ST.prefs?.small || {}) });
+const feeOf = (m, sm = SMALL()) => ({ ...FEE_PRESETS[m === 'SG' ? sm.sgBroker : m], ...(sm.fees[m] || {}) });
+const STRAT_NAMES = { rsi2: 'RSI(2) dip', brk: '20-day breakout', pull: 'EMA20 pullback' };
+function sideFee(f, value) { return Math.max(f.min, f.pct / 100 * value) + f.add / 100 * value; }
+// Shares to buy for one setup: risk-based, capped by the per-position budget, rounded to board lots (US allows fractions).
+function sizeSetup(x, sm = SMALL()) {
+  const f = feeOf(x.m, sm), fx = D.fx || {};
+  const budget = PT.convert(sm.cap / sm.maxPos, 'SGD', x.cur, fx), risk = PT.convert(sm.cap * sm.risk / 100, 'SGD', x.cur, fx);
+  const per = x.px - x.stop;
+  if (!(budget > 0) || !(per > 0)) return null;
+  const lot = PT.LOT(x.s), frac = ['US', 'ETF'].includes(x.m);
+  const raw = Math.min(risk / per, budget / x.px);
+  const qty = frac ? Math.floor(raw * 100) / 100 : Math.floor(raw / lot) * lot;
+  // Fees are set in the broker's currency (e.g. US$0.99), which can differ from the stock's (JPY, HKD, USD on SGX…).
+  const value = qty * x.px, valueF = PT.convert(value, x.cur, f.cur, fx);
+  const rtF = qty > 0 && valueF != null ? 2 * sideFee(f, valueF) : 0, rt = PT.convert(rtF, f.cur, x.cur, fx) ?? 0;
+  return { qty, value, rt, feePct: valueF ? rtF / valueF : null, lossAtStop: qty * per + rt, valueSgd: PT.convert(value, x.cur, 'SGD', fx), lot, frac, ok: qty > 0 && valueF != null };
+}
+function netStats(st, m, sm = SMALL()) {
+  const f = feeOf(m, sm), cur = FEE_PRESETS[m === 'SG' ? sm.sgBroker : m].cur;
+  const pos = PT.convert(sm.cap / sm.maxPos, 'SGD', cur, D.fx || {});
+  const fp = pos ? 2 * sideFee(f, pos) / pos : 0;
+  const r = (st.r || []).map(x => x - fp), g = r.filter(x => x > 0).reduce((a, x) => a + x, 0), l = -r.filter(x => x < 0).reduce((a, x) => a + x, 0);
+  return { fp, n: r.length, win: r.filter(x => x > 0).length / (r.length || 1), avg: r.reduce((a, x) => a + x, 0) / (r.length || 1), pf: l ? g / l : null };
+}
+VIEWS.quick = async (_, main) => {
+  await universe();
+  const Q = D.summary.quick, sm = SMALL();
+  if (!Q) { main.innerHTML = '<div class="warn">Strategy data arrives with the next full update (after the market close).</div>'; return; }
+  const mkts = ['US', 'ETF', 'MY', 'SG', 'GL'], MK = { ...MKT, ETF: 'Shariah ETFs' };
+  const edge = {};
+  for (const k of Object.keys(Q.strats)) for (const m of mkts) if (Q.stats[k]?.[m]) edge[`${k}|${m}`] = netStats(Q.stats[k][m], m, sm);
+  const sigs = Q.signals.map(x => ({ ...x, z: sizeSetup(x, sm), e: edge[`${x.k}|${x.m}`] }))
+    .sort((a, b) => (b.z?.ok - a.z?.ok) || ((b.e?.avg ?? -1) - (a.e?.avg ?? -1)));
+  const list = (ST.quick || []).filter(x => !x.del).sort((a, b) => (b.u || '').localeCompare(a.u || ''));
+  const verdict = e => !e ? '<span class="dim">–</span>' : e.avg > 0.004 && (e.pf ?? 0) > 1.2 ? '<span class="up">edge after fees</span>' : e.avg > 0 ? '<span class="flat">thin</span>' : '<span class="down">fees eat it</span>';
+  main.innerHTML = `<div class="grid wide">
+    ${panel('Small-account plan', `<form class="pb" id="smF"><div class="form">
+      <label>Trading capital (SGD)<input class="f" name="cap" inputmode="decimal" value="${sm.cap}"></label>
+      <label>Max open positions<input class="f" name="maxPos" inputmode="numeric" value="${sm.maxPos}"></label>
+      <label>Risk per trade % of capital<input class="f" name="risk" inputmode="decimal" value="${sm.risk}"></label>
+      <label>SGX broker<select class="f" name="sgBroker"><option value="SG" ${sm.sgBroker === 'SG' ? 'selected' : ''}>moomoo SG</option><option value="SGU" ${sm.sgBroker === 'SGU' ? 'selected' : ''}>UOB Kay Hian (cash)</option></select></label></div>
+      <p class="mono">Per position ≈ S$${money(sm.cap / sm.maxPos)} · max loss per trade ≈ S$${money(sm.cap * sm.risk / 100)} · round-trip fees on S$${money(sm.cap / sm.maxPos)}: ${mkts.map(m => { const f = feeOf(m, sm), c = FEE_PRESETS[m === 'SG' ? sm.sgBroker : m].cur, v = PT.convert(sm.cap / sm.maxPos, 'SGD', c, D.fx || {}); return v ? `${MK[m]} <b class="${2 * sideFee(f, v) / v > 0.01 ? 'down' : 'up'}">${(200 * sideFee(f, v) / v).toFixed(2)}%</b>` : ''; }).join(' · ')}</p>
+      <button class="btn">SAVE PLAN</button> <span class="note">Fee presets are third-party figures from Oct 2026; check your broker's fee page.</span></form>`, '', 'span')}
+    ${panel('Backtest: which setups survive your fees? (last ~2 years, compliant stocks, one trade at a time per stock)', `<div class="tw"><table><thead><tr><th class="l">Strategy</th><th class="l">Market</th><th>Trades</th><th>Win % (gross)</th><th>Avg/trade (gross)</th><th>Fees round trip</th><th>Win % (net)</th><th>Avg/trade (net)</th><th>Profit factor (net)</th><th class="l">Verdict</th></tr></thead><tbody>
+      ${Object.keys(Q.strats).flatMap(k => mkts.filter(m => Q.stats[k]?.[m]).map(m => { const g = Q.stats[k][m], e = edge[`${k}|${m}`]; return `<tr><td class="l">${STRAT_NAMES[k]}</td><td class="l">${MK[m]}</td><td>${g.n}</td><td>${pctp(g.win)}</td><td>${pct(g.avg)}</td><td>${pct(-e.fp)}</td><td>${pctp(e.win)}</td><td>${pct(e.avg)}</td><td>${e.pf ? e.pf.toFixed(2) : '–'}</td><td class="l">${verdict(e)}</td></tr>`; })).join('')}</tbody></table></div>
+      <div class="pb note">${Object.entries(Q.strats).map(([k, d]) => `<p><b>${STRAT_NAMES[k]}</b>: ${esc(d)}</p>`).join('')}<p>Honest limits: the universe is today's compliant list (survivorship bias), fills assume the next open with no slippage, and two years is one market regime. Treat "edge after fees" as "worth paper-trading first", not as a promise.</p></div>`, '', 'span')}
+    ${panel(`Today's setups (${esc(sgt(Q.at))} SGT)`, `<div class="tw"><table><thead><tr><th>Ticker</th><th class="l">Setup</th><th class="l">Status</th><th>Last</th><th>Stop</th><th>Target</th><th>Qty</th><th>Cost (S$)</th><th>Fees r/t</th><th>Loss at stop</th><th class="l">Backtest (net)</th><th></th></tr></thead><tbody>
+      ${sigs.map(x => { const z = x.z; return `<tr class="go" data-go="stock/${encodeURIComponent(x.s)}">${symCell(x)}<td class="l">${STRAT_NAMES[x.k]} <span class="dim">${esc(MK[x.m])}</span></td><td class="l">${badge(x.st)}</td>
+        <td>${px(x.px)}</td><td>${px(x.stop)}</td><td>${x.tgt ? px(x.tgt) : '<span class="dim">rule exit</span>'}</td>
+        <td>${z?.ok ? (z.frac ? z.qty.toFixed(2) : z.qty.toLocaleString()) : `<span class="down" title="One board lot costs more than your per-position budget">too pricey</span>`}</td><td>${z?.ok ? money(z.valueSgd) : '–'}</td><td class="${z?.feePct > 0.01 ? 'down' : ''}">${z?.ok ? pct(z.feePct) : '–'}</td><td>${z?.ok ? money(z.lossAtStop) + ' ' + esc(x.cur) : '–'}</td>
+        <td class="l">${x.e ? `${pct(x.e.avg)} avg · ${verdict(x.e)}` : '–'}</td><td>${z?.ok ? `<button class="btn sm ghost" data-q="${esc(JSON.stringify({ s: x.s, k: x.k, m: x.m, entry: x.px, stop: x.stop, tgt: x.tgt, qty: z.qty, cur: x.cur }))}">＋ LIST</button>` : ''}</td></tr>`; }).join('') || '<tr><td colspan="12" class="l muted">No setups today. That is normal: these rules wait for specific conditions.</td></tr>'}</tbody></table></div>
+      <p class="pb note">Signals are from the latest daily close; enter at the next open only if the setup still holds. "Qty" risks ${sm.risk}% of capital to the stop and never uses more than 1/${sm.maxPos} of capital. Shariah: status C or P only, cash account, no shorting, no margin.</p>`, '', 'span')}
+    ${panel(`${esc(ME.name)}'s quick-trade list`, `<div class="tw"><table><thead><tr><th>Ticker</th><th class="l">Setup</th><th>Entry</th><th>Stop</th><th>Target</th><th>Qty</th><th>Last</th><th>vs entry</th><th class="l">Status</th><th class="l">Note</th><th></th></tr></thead><tbody>
+      ${list.map(x => { const q = quoteOf(x.s); return `<tr data-qid="${esc(x.id)}"><td class="l"><a class="sym" href="#stock/${encodeURIComponent(x.s)}">${esc(x.s)}</a></td><td class="l">${STRAT_NAMES[x.k] || esc(x.k)}</td><td>${px(x.entry)}</td><td>${px(x.stop)}</td><td>${x.tgt ? px(x.tgt) : '–'}</td><td>${x.qty}</td>
+        <td>${px(q?.px)}</td><td>${q ? pct(q.px / x.entry - 1) : '–'}</td>
+        <td class="l"><select class="f" data-f="status">${['planned', 'open', 'closed', 'skipped'].map(st => `<option ${x.status === st ? 'selected' : ''}>${st}</option>`).join('')}</select></td>
+        <td class="l"><input class="f" style="width:180px" data-f="note" value="${esc(x.note || '')}" placeholder="Why / result"></td>
+        <td class="row" style="flex-wrap:nowrap"><button class="btn sm ghost" data-alert title="Add to watchlist with alerts at the stop and target">ALERTS</button><a class="btn sm ghost" href="#paper/${encodeURIComponent(x.s)}/${x.qty}">PAPER</a><button class="btn sm ghost" data-rmq aria-label="Remove">✕</button></td></tr>`; }).join('') || '<tr><td colspan="11" class="l muted">Tap “＋ LIST” on a setup above to plan it here.</td></tr>'}</tbody></table></div>`, '', 'span')}
+    ${panel('Small-account playbook', `<div class="pb md">${LEARN.find(x => x.id === 'small').html}</div>`, '', 'span')}
+  </div>`;
+  $('#smF').onsubmit = e => {
+    e.preventDefault();
+    const f = new FormData(e.target), num = (k, lo, hi, d) => Math.min(hi, Math.max(lo, +f.get(k) || d));
+    ST.prefs = { ...P(), small: { ...sm, cap: num('cap', 100, 1e8, 1500), maxPos: Math.round(num('maxPos', 1, 10, 2)), risk: num('risk', 0.25, 5, 1.5), sgBroker: f.get('sgBroker') } };
+    saveState(); toast('Plan saved'); route(true);
+  };
+  $$('[data-q]', main).forEach(b => b.onclick = () => {
+    const x = JSON.parse(b.dataset.q);
+    ST.quick = [...(ST.quick || []), { id: PT.rid(), ...x, status: 'planned', at: now(), u: now() }];
+    saveState(); toast(`${x.s} added to your quick-trade list`); route(true);
+  });
+  $$('tr[data-qid]', main).forEach(tr => {
+    const x = ST.quick.find(q => q.id === tr.dataset.qid);
+    $$('[data-f]', tr).forEach(i => i.onchange = () => { x[i.dataset.f] = i.value; x.u = now(); saveState(); toast('Saved'); });
+    $('[data-rmq]', tr).onclick = () => { Object.assign(x, { del: true, u: now() }); saveState(); route(true); };
+    $('[data-alert]', tr).onclick = () => {
+      let w = ST.wl.find(y => y.s === x.s);
+      if (!w || w.del) { if (!inWl(x.s)) toggleWl(x.s); w = ST.wl.find(y => y.s === x.s); }
+      Object.assign(w, { below: +(+x.stop).toPrecision(5), above: x.tgt ? +(+x.tgt).toPrecision(5) : w.above, u: now() });
+      saveState(); toast(`Alerts set for ${x.s}: below ${px(x.stop)}${x.tgt ? `, above ${px(x.tgt)}` : ''}`);
+    };
+  });
 };
 
 // ---------------------------------------------------------------- paper trading
@@ -867,13 +993,15 @@ function processOrders() {
     const q = quoteOf(o.s), fill = PT.trigger(o, q);
     if (fill == null) continue;
     const t = PT.makeTrade(ST.paper, { ...o, id: 't' + o.id }, fill, q.cur, D.fx);
+    if (!t) continue;  // no exchange rate yet: try again on the next quote
     if (o.side === 'sell' && (PT.holdings(ST.paper).pos[o.s]?.q || 0) < o.q) { Object.assign(o, { status: 'cancelled', why: 'not enough shares', u: now() }); continue; }
     ST.paper.trades.push(t); Object.assign(o, { status: 'filled', fill, u: now() }); n++;
     toast(`Paper ${o.side} ${o.q} ${o.s} filled at ${px(fill)}`);
   }
   if (n) saveState();
 }
-VIEWS.paper = async (sym, main) => {
+VIEWS.paper = async (arg, main) => {
+  const [sym, preQty] = (arg || '').split('/');
   await universe();
   processOrders();
   const pa = ST.paper, fx = D.fx || D.summary.fx || {};
@@ -897,7 +1025,7 @@ VIEWS.paper = async (sym, main) => {
       <div class="form"><label>Stock<input class="f" id="tkS" list="cmdList" value="${esc(sym || '')}" placeholder="AAPL, 5347.KL…" autocapitalize="characters" required></label>
       <label>Side<span class="seg"><button type="button" data-side="buy" class="on buy">BUY</button><button type="button" data-side="sell">SELL</button></span></label>
       <label>Type<span class="seg">${['market', 'limit', 'stop'].map((t, i) => `<button type="button" data-type="${t}" class="${i ? '' : 'on t'}">${t.toUpperCase()}</button>`).join('')}</span></label>
-      <label>Quantity (shares)<input class="f" id="tkQ" inputmode="numeric" placeholder="e.g. 100"></label>
+      <label>Quantity (shares)<input class="f" id="tkQ" inputmode="numeric" placeholder="e.g. 100" value="${+preQty > 0 ? +preQty : ''}"></label>
       <label id="tkPxL" hidden>Price<input class="f" id="tkPx" inputmode="decimal"></label></div>
       <p id="tkInfo" class="mono"></p><p id="tkErr" class="err"></p><button class="btn" id="tkGo">PLACE ORDER</button></form>`)}
     ${panel('Positions', `<div class="tw"><table><thead><tr><th>Ticker</th><th>Qty</th><th>Avg cost</th><th>Last</th><th>Value (${esc(B)})</th><th>P/L</th><th>P/L %</th><th class="l">Status</th><th></th></tr></thead><tbody>
@@ -925,11 +1053,13 @@ VIEWS.paper = async (sym, main) => {
   $('#tk').onsubmit = e => {
     e.preventDefault();
     const s = $('#tkS').value.trim().toUpperCase(), q = quoteOf(s);
-    const o = { id: PT.rid(), s, side: T.side, type: T.type, q: +$('#tkQ').value, px: T.type === 'market' ? null : +$('#tkPx').value, at: now(), u: now(), status: 'open' };
+    const o = { id: PT.rid(), s, side: T.side, type: T.type, q: +$('#tkQ').value, px: T.type === 'market' ? null : +$('#tkPx').value, at: now(), u: now(), status: 'open', d0: q?.d };
     const err = !q ? 'Unknown ticker or no price yet.' : PT.check(pa, o, q, fx, { shariahOnly: P().shariahOnly, status: q.st });
     if (err) { $('#tkErr').textContent = err; return; }
     if (o.type === 'market') {
-      pa.trades.push(PT.makeTrade(pa, o, q.px, q.cur, fx)); o.status = 'filled'; o.fill = q.px;
+      const t = PT.makeTrade(pa, o, q.px, q.cur, fx);
+      if (!t) { $('#tkErr').textContent = 'No exchange rate for this currency yet. Try again after the next update.'; return; }
+      pa.trades.push(t); o.status = 'filled'; o.fill = q.px;
       toast(`Paper ${o.side} ${o.q} ${s} at ${px(q.px)}`);
     } else { o.reserve = o.side === 'buy' ? PT.convert(o.q * o.px, q.cur, B, fx) * (1 + pa.fee / 100) : 0; toast('Order placed'); }
     pa.orders.push(o); saveState(); route(true);
@@ -939,7 +1069,7 @@ VIEWS.paper = async (sym, main) => {
   // family leaderboard: everyone's paper return, read-only
   const rows = [];
   for (const p of people()) {
-    const st = p.id === ME.id ? ST : mergeState(await readData(`p/${p.id}.bin`).catch(() => null), store.get(`st:${p.id}`, null));
+    const st = p.id === ME.id ? ST : await boardState(p.id);
     if (!st?.paper) continue;
     const v = PT.value(st.paper, s => quoteOf(s), fx);
     rows.push({ p, ret: v.ret, eq: v.equity, base: st.paper.base, n: st.paper.trades.filter(t => t.at >= st.paper.resetAt).length });
@@ -947,6 +1077,14 @@ VIEWS.paper = async (sym, main) => {
   if ($('#board')) $('#board').innerHTML = panel('Family leaderboard (paper)', `<div class="tw"><table><thead><tr><th>Who</th><th>Return</th><th>Equity</th><th>Trades</th></tr></thead><tbody>
     ${rows.sort((a, b) => b.ret - a.ret).map(x => `<tr><td class="l"><span class="avatar" style="display:inline-grid;place-items:center;width:22px;height:22px;font-size:11px;background:${esc(x.p.color)}">${esc(x.p.name[0])}</span> ${esc(x.p.name)}</td><td>${pct(x.ret)}</td><td>${money(x.eq)} ${esc(x.base)}</td><td>${x.n}</td></tr>`).join('')}</tbody></table></div>`);
 };
+const boards = new Map();
+async function boardState(id) {
+  const c = boards.get(id);
+  if (c && Date.now() - c.t < 300000) return c.st;
+  const st = mergeState(await readData(`p/${id}.bin`).catch(() => null), store.get(`st:${id}`, null));
+  boards.set(id, { t: Date.now(), st });
+  return st;
+}
 function spark(v) {
   const W = 600, H = 90, lo = Math.min(...v), hi = Math.max(...v), y = x => H - 6 - (x - lo) / ((hi - lo) || 1) * (H - 12);
   const pts = v.map((x, i) => `${(i / (v.length - 1) * W).toFixed(1)},${y(x).toFixed(1)}`).join(' ');
@@ -1075,7 +1213,7 @@ VIEWS.settings = async (_, main) => {
     e.preventDefault();
     if (!resetArm) { resetArm = true; $('#paReset').textContent = 'TAP AGAIN: START A NEW ACCOUNT'; return; }
     const f = new FormData(e.target);
-    Object.assign(ST.paper, { start: Math.max(100, +f.get('start') || 100000), base: f.get('base'), fee: Math.max(0, Math.min(2, +f.get('fee') || 0)), resetAt: now(), eq: [] });
+    Object.assign(ST.paper, { start: Math.max(100, +f.get('start') || 1500), base: f.get('base'), fee: Math.max(0, Math.min(2, +f.get('fee') || 0)), resetAt: now(), eq: [] });
     ST.paper.orders.filter(o => o.status === 'open').forEach(o => Object.assign(o, { status: 'cancelled', u: now() }));
     saveState(); toast('New paper account started'); location.hash = 'paper';
   };

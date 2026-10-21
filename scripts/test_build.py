@@ -43,10 +43,18 @@ st = {'wl': [{'s': 'AAPL', 'above': 300}, {'s': 'MSFT', 'del': True, 'above': 1}
 assert b.positions(st) == {'AAPL': 6}
 assert set(b.family_symbols([({'id': 'a'}, st)])) == {'AAPL', 'NVDA'}
 sent = {}
-q = {'AAPL': {'p': 310, 'c': 0.01}, 'MSFT': {'p': 500, 'c': 0}, 'NVDA': {'p': 101, 'c': 0, 'h': 105, 'l': 99}}
+q = {'AAPL': {'p': 310, 'c': 0.01}, 'MSFT': {'p': 500, 'c': 0}, 'NVDA': {'p': 101, 'c': 0, 'h': 105, 'l': 99, 'd': '2026-10-21'}}
 m = b.alerts({'id': 'a'}, st, q, sent, '2026-10-21')
 assert [x['tag'] for x in m] == ['AAPL:above', 'order:o1'], m
 assert b.alerts({'id': 'a'}, st, q, sent, '2026-10-21') == []             # once a day
 st['prefs'] = {'notify': {'alerts': False, 'orders': False}, 'move': 0.5}
 assert [x['tag'] for x in b.alerts({'id': 'b'}, st, q, {}, '2026-10-21')] == ['AAPL:move']   # 1% move >= 0.5% threshold
+# same-day orders only fill on the current price, not on a low that happened before the order existed
+st2 = {'paper': {'orders': [{'id': 'o2', 's': 'NVDA', 'side': 'buy', 'type': 'limit', 'px': 100, 'status': 'open', 'at': '2026-10-21T01:00:00Z', 'd0': '2026-10-21'}], 'trades': []}}
+assert b.alerts({'id': 'c'}, st2, q, {}, '2026-10-21') == []
+# deleted push subscriptions are never sent to
+import json as _j, tempfile as _t
+os.environ['PUSH_OUT'] = _t.mktemp()
+b.write_push([{'subs': [{'endpoint': 'a'}, {'endpoint': 'b', 'del': True}], 'msgs': [{'title': 't'}]}])
+assert [s['endpoint'] for s in _j.load(open(os.environ['PUSH_OUT']))['jobs'][0]['subs']] == ['a']
 print('ok')

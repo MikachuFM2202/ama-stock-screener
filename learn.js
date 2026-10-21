@@ -284,8 +284,40 @@ ${box('Golden rule', 'No forecast replaces a plan: know your entry, your stop an
 <h2>Using AI well</h2>
 <p>The reports here come from a large language model given only the day's data. It summarises well but can still invent numbers: the number check and the data appendix exist for that reason. Treat AI text as a smart summary to check, never as a signal on its own.</p>` },
 
+  { id: 'small', t: '13a · Trading a small account (S$1,500)', lvl: 'Practical', html: `
+<h2>The honest starting point</h2>
+<p>With S$1,500, the goal for the first year is to <b>learn a repeatable process without losing the account</b>, not to get rich. Large studies of short-term traders are sobering: in Taiwan, fewer than 1% of day traders were predictably profitable year after year (Barber, Lee, Liu &amp; Odean), and in Brazil, 97% of people who day-traded futures for more than 300 days lost money (Chague, De-Losso &amp; Giovannetti, 2019). The traders who survive keep risk tiny, trade few setups, and keep costs low.</p>
+<h2>Rule 1: fees decide where you can trade</h2>
+<table><tr><th>Venue</th><th>Cost on a S$750 position, buy + sell</th><th>Verdict for quick trades</th></tr>
+<tr><td>US stocks / Shariah ETFs via moomoo (US$0.99 per order, fractional shares)</td><td>≈ 0.35%</td><td><b>Best</b>: small, frequent trades are viable</td></tr>
+<tr><td>Bursa via M+ Online (0.08%, min RM8, plus clearing and stamp duty)</td><td>≈ 0.9–1.0%</td><td>Only for swings aiming at 4%+ moves; avoid many small trades</td></tr>
+<tr><td>SGX via moomoo SG (check the current rate card)</td><td>≈ 0.3–1.3%</td><td>Possible; confirm the minimum first</td></tr>
+<tr><td>SGX via UOB Kay Hian cash account (min S$25 per side)</td><td>≈ 6.7%</td><td><b>Never</b> for short-term trades at this size; fine for long-term holdings</td></tr></table>
+<p>The Small-account tab recalculates this live from your capital and broker, and shows which backtested setups still make money <i>after</i> those fees.</p>
+<h2>Rule 2: size every trade from the stop</h2>
+<ul><li>Risk 1–2% of capital per trade: S$15–30. Shares = risk ÷ (entry − stop).</li><li>At most 2 positions at a time (about S$750 each), so one bad day can't hurt much.</li>
+<li>Set a daily or weekly stop: after 3 losses in a row, pause and review the journal.</li>
+<li>Bursa and SGX trade in lots of 100 shares, so expensive stocks may not fit; US stocks allow fractions on moomoo.</li></ul>
+<h2>The three setups (all long-only, cash account, Shariah C/P stocks)</h2>
+<ol><li><b>RSI(2) dip in an uptrend</b>: from Larry Connors &amp; Cesar Alvarez, <i>Short Term Trading Strategies That Work</i> (2008). In stocks above their 200-day average, sharp 2-day pullbacks have tended to snap back within days. It has a high win rate but small average gains, which makes it very sensitive to fees. Best on US stocks and the US Shariah ETFs (SPUS, HLAL).</li>
+<li><b>20-day breakout on volume</b>: momentum research (Jegadeesh &amp; Titman, 1993) and the 52-week-high effect (George &amp; Hwang, 2004). Fewer winners, but bigger ones. Wait for the close above the range on 1.5× volume.</li>
+<li><b>Pullback to the rising 20-day EMA</b>: buy a dip in an established uptrend when the day closes green above the EMA. Stop under the 3-day low, target 2× the risk.</li></ol>
+<p>Not offered: <b>opening-range breakout</b> day trading. A 2023 study (Zarattini, Barbon &amp; Aziz) found an edge on QQQ, but its headline results used leveraged ETFs (not Shariah-compliant), and it needs minute-by-minute data and screen time at 21:30–23:30 SGT. Study it on paper only.</p>
+<h2>Rule 3: fit the clock</h2>
+<p>US stocks trade 21:30–04:00 SGT (22:30–05:00 from 1 Nov 2026). Swing setups (1–10 days) suit a working life: read the 06:30 brief, place the entry, stop and target as orders, and check once in the evening. Don't stay up every night.</p>
+<h2>Rule 4: cash, settlement and currency</h2>
+<ul><li>Use a cash account (no margin interest; Shariah-friendly). US trades settle T+1, Bursa and SGX T+2: don't re-buy with money that hasn't settled yet, or the broker may restrict the account. Check moomoo SG's exact rule.</li>
+<li>Convert SGD to USD once and keep a USD balance. Converting on every trade adds a hidden 0.2–0.5%.</li></ul>
+<h2>Avoid</h2>
+<ul><li>Penny stocks under RM0.20 / S$0.20: one tick can be 2–5% of the price, and they're easy to manipulate.</li><li>"Hot tips" from Telegram, WhatsApp or TikTok groups (classic pump-and-dump).</li>
+<li>Averaging down on a losing quick trade, and revenge trading after a loss.</li><li>Leveraged or inverse ETFs, CFDs, options and margin: not Shariah-compliant, and they wipe out small accounts.</li></ul>
+<h2>A 90-day path</h2>
+<ol><li>Weeks 1–4: paper-trade only the setups marked "edge after fees", at least 20 trades, all journaled.</li>
+<li>Weeks 5–8: if paper results are positive, trade real money at half size (0.75% risk).</li>
+<li>Weeks 9–12: full size, still at most 2 positions. Add savings monthly rather than raising risk. 1–3% a month is an excellent result.</li></ol>` },
+
   { id: 'paper', t: '13 · Paper trading', lvl: 'Practice', html: `
-<p>Paper trading means trading with virtual money at real market prices: the safest way to test a strategy or learn a new market. Each profile has its own account (default S$100,000, base currency and fee adjustable in Settings).</p>
+<p>Paper trading means trading with virtual money at real market prices: the safest way to test a strategy or learn a new market. Each profile has its own account (default S$1,500 to match a small real account, base currency and fee adjustable in Settings).</p>
 <h2>How orders work here</h2>
 <ul><li><b>Market</b>: fills straight away at the latest price (a live quote when available, else the last close).</li>
 <li><b>Limit buy / limit sell</b>: waits until a quote reaches your price or better.</li>

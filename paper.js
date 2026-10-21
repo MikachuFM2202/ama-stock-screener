@@ -13,7 +13,7 @@ export function convert(amount, cur, base, fx) {
   return amount / a * b;
 }
 
-export function newAccount(start = 100000, base = 'SGD', fee = 0.1) {
+export function newAccount(start = 1500, base = 'SGD', fee = 0.1) {
   return { start, base, fee, trades: [], orders: [], eq: [], resetAt: new Date(0).toISOString() };
 }
 
@@ -25,7 +25,9 @@ export function holdings(p) {
   const pos = {};
   for (const t of (p.trades || []).filter(live(p)).sort((a, b) => a.at.localeCompare(b.at))) {
     const gross = t.q * t.px * t.rate, fee = t.fee || 0;
+    if (!(t.rate > 0)) continue;  // a trade without an exchange rate can't be valued; never let it poison the cash
     const x = pos[t.s] ||= { s: t.s, q: 0, cost: 0, costBase: 0, cur: t.cur };
+    if (t.side === 'sell' && x.q <= 0) { delete pos[t.s]; continue; }  // a sell with nothing held (bad merge) is ignored
     fees += fee;
     if (t.side === 'buy') { cash -= gross + fee; x.q += t.q; x.cost += t.q * t.px; x.costBase += gross + fee; }
     else {
@@ -61,6 +63,7 @@ export function value(p, price, fx) {
 // Checks an order before it is placed. Returns an error message, or '' when fine.
 export function check(p, o, quote, fx, opts = {}) {
   if (!o.s) return 'Pick a stock.';
+  if (/[\^=]/.test(o.s)) return `${o.s} is an index, future or currency: not tradable here. Try a stock or a Shariah ETF.`;
   if (!(o.q > 0) || !Number.isInteger(o.q)) return 'Quantity must be a whole number of shares.';
   if (o.q % LOT(o.s)) return `${o.s} trades in board lots of ${LOT(o.s)} shares.`;
   if (opts.shariahOnly && o.side === 'buy' && opts.status === 'F') return 'Shariah-only mode: this stock is not Shariah-compliant (status F).';
@@ -70,6 +73,7 @@ export function check(p, o, quote, fx, opts = {}) {
     const held = h.pos[o.s]?.q || 0;
     const reserved = (p.orders || []).filter(x => x.status === 'open' && x.side === 'sell' && x.s === o.s).reduce((a, x) => a + x.q, 0);
     if (o.q > held - reserved) return `You can sell at most ${held - reserved} (no short selling in a Shariah account).`;
+    if (convert(1, quote?.cur || h.pos[o.s]?.cur || 'USD', p.base, fx) == null) return 'No exchange rate for this currency yet.';
     return '';
   }
   const px = o.type === 'market' ? quote?.px : o.px;
@@ -82,17 +86,22 @@ export function check(p, o, quote, fx, opts = {}) {
   return '';
 }
 
+// Returns null when there is no exchange rate yet (callers keep the order open / show an error).
 export function makeTrade(p, o, px, cur, fx, at = new Date().toISOString()) {
   const rate = convert(1, cur, p.base, fx);
+  if (!(rate > 0) || !(px > 0)) return null;
   return { id: o.id || rid(), s: o.s, side: o.side, q: o.q, px, cur, rate, fee: o.q * px * rate * p.fee / 100, at, type: o.type };
 }
 
-// Should a resting order fill, given today's quote { px, h, l, d }? Returns the fill price or null.
-// Only quotes from the order's own day or later count, so yesterday's low can't fill today's order.
+// Should a resting order fill, given the latest quote { px, h, l, d }? Returns the fill price or null.
+// On the day the order was placed (o.d0 = the quote's trading date then) only the current price counts: that day's
+// high/low may have happened before the order existed. On later days the day's high/low count too.
 export function trigger(o, q) {
   if (o.status !== 'open' || !q || !(q.px > 0)) return null;
-  if (q.d && q.d < o.at.slice(0, 10)) return null;
-  const hi = q.h ?? q.px, lo = q.l ?? q.px;
+  const d0 = o.d0 || o.at.slice(0, 10);
+  if (q.d && q.d < d0) return null;
+  const later = q.d && q.d > d0;
+  const hi = later ? q.h ?? q.px : q.px, lo = later ? q.l ?? q.px : q.px;
   if (o.side === 'buy' && o.type === 'limit' && lo <= o.px) return Math.min(o.px, q.px <= o.px ? q.px : o.px);
   if (o.side === 'buy' && o.type === 'stop' && hi >= o.px) return Math.max(o.px, q.px);
   if (o.side === 'sell' && o.type === 'limit' && hi >= o.px) return Math.max(o.px, q.px >= o.px ? q.px : o.px);

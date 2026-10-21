@@ -42,4 +42,15 @@ assert.equal(holdings(p).cash, 10000);
 const m = mergeList([{ id: 'a', u: '1', x: 1 }, { id: 'b', u: '1' }], [{ id: 'a', u: '2', x: 2 }, { id: 'c', u: '1' }]);
 assert.deepEqual(m.map(x => x.id).sort(), ['a', 'b', 'c']);
 assert.equal(m.find(x => x.id === 'a').x, 2);
+// same-day: an earlier low doesn't fill a just-placed limit; the next day's low does
+const o2 = { status: 'open', side: 'buy', type: 'limit', px: 100, at: '2026-10-21T06:00:00Z', d0: '2026-10-21' };
+assert.equal(trigger(o2, { px: 103, h: 106, l: 98, d: '2026-10-21' }), null);
+assert.equal(trigger(o2, { px: 103, h: 106, l: 98, d: '2026-10-22' }), 100);
+// no FX rate: no trade, and no NaN cash
+assert.equal(makeTrade(p, { s: 'X.T', side: 'buy', q: 1, type: 'market' }, 100, 'JPY', fx), null);
+const bad = newAccount(1000, 'SGD', 0); bad.trades.push({ s: 'Y', side: 'buy', q: 1, px: 1, rate: null, at: '2026-11-01T00:00:00Z' });
+assert.equal(holdings(bad).cash, 1000);
+// indices / futures / FX are not tradable; sells need an FX rate too
+assert.match(check(p, { s: '^GSPC', side: 'buy', q: 1, type: 'market' }, { px: 1, cur: 'USD' }, fx), /not tradable/);
+assert.match(check(p, { s: 'CL=F', side: 'buy', q: 1, type: 'market' }, { px: 1, cur: 'USD' }, fx), /not tradable/);
 console.log('ok');
