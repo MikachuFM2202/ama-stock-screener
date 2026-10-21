@@ -12,7 +12,7 @@ GitHub Actions (scripts/build.py, 3 schedules)
   ├─ Shariah status: SC Malaysia SAC list (PDF), SP Funds S&P Shariah ETF holdings, own AAOIFI-style screen
   ├─ indicators, trend score, statistical forecasts (historical base rates per score bucket), ideas, movers
   ├─ news (Google News RSS), calendar (Forex Factory), videos (YouTube RSS), podcasts (RSS)
-  ├─ AI daily brief / weekly report via GitHub Models (free tier), plus a number check
+  ├─ AI daily brief / weekly report via any OpenAI-compatible API (default: Gemini free tier), plus a number check
   ├─ encrypt everything with the site password → force-push to the orphan `market` branch
   └─ Web Push notifications (scripts/push.mjs)
 Static site (index.html, app.js, learn.js) on GitHub Pages from main
@@ -32,6 +32,7 @@ Branches: `main` holds the code (Pages). `market` is rebuilt and force-pushed ev
 
 Repository secrets:
 - `SITE_PASSWORD`: the site password.
+- `LLM_API_KEY`: a free Gemini API key from https://aistudio.google.com/apikey (without it, reports are numbers-only). To use another provider (OpenRouter, Groq…), set the repository variables `LLM_BASE_URL` and `LLM_MODEL`.
 - `VAPID_PRIVATE_KEY`: the Web Push private key. The public key is in `app.js` and `scripts/push.mjs`; regenerate both together if it's lost (`npx web-push generate-vapid-keys`).
 
 On the site: **Settings → Sync** takes a fine-grained GitHub token (this repo only, Contents + Actions read/write). It's stored encrypted in `data/vault.bin`, so every device unlocks it with the password.
@@ -51,7 +52,7 @@ To preview locally, serve a folder that has the site files plus `market/` (a bui
 
 ### Local LLM (optional)
 
-`OLLAMA_MODEL=<model> scripts/build.py daily` writes reports with a local Ollama model instead of GitHub Models. Tested on 2026-10-21 with qwen2.5vl:7b: it invented index levels (S&P 500 "4,112" vs the real 7,713), so the cloud model is the default. The number check flags such figures either way. Any model downloads belong on the SSD under `EXT_011_stocks-tracker/`.
+`OLLAMA_MODEL=<model> scripts/build.py daily` writes reports with a local Ollama model instead of the cloud API. Tested on 2026-10-21 with qwen2.5vl:7b: it invented index levels (S&P 500 "4,112" vs the real 7,713), so the cloud model is the default. The number check flags such figures either way. Any model downloads belong on the SSD under `EXT_011_stocks-tracker/`.
 
 ## Caveats
 

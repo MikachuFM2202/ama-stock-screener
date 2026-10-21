@@ -10,7 +10,7 @@ on:
     inputs:
       mode: { type: choice, options: [evening, daily, weekly], default: evening }
   repository_dispatch: { types: [test-push] }
-permissions: { contents: write, models: read }
+permissions: { contents: write }
 concurrency: { group: market, cancel-in-progress: false }
 jobs:
   build:
@@ -49,7 +49,9 @@ jobs:
           OUT: out
           STATE: state.bin
           PUSH_OUT: push.json
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
       - name: Publish market branch
         if: steps.m.outputs.mode != 'testpush'
         working-directory: out

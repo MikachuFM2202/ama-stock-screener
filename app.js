@@ -641,7 +641,7 @@ VIEWS.settings = async (_, main) => {
     ${panel('moomoo OpenAPI', `<div class="pb md">${LEARN.find(x => x.id === 'moomoo').html}</div>`)}
     ${panel('Data & schedule', `<div class="pb"><p>Snapshot: <b>${esc(sgt(D.summary.at))} SGT</b> (${esc(D.summary.mode)}). Universe: ${Object.entries(D.summary.counts || {}).map(([m, c]) => `${m} ${Object.entries(c).map(([k, v]) => `${k}:${v}`).join(' ')}`).join(' · ')}.</p>
       <ul><li>Mon–Sat 06:30 SGT: US close + daily AI brief + notifications</li><li>Mon–Fri 18:15 SGT: Asia close refresh</li><li>Sun 17:00 SGT: universe + Shariah re-screen + full weekly report</li></ul>
-      <p class="note">Prices: Yahoo Finance (delayed/end-of-day). Shariah: SC Malaysia SAC list (${esc(D.summary.sc?.asof || '?')}), SP Funds S&P Shariah ETF holdings, own AAOIFI-style ratio screen. News: Google News. Calendar: Forex Factory. AI: GitHub Models (free tier). Everything is encrypted with your password before it's published.</p>
+      <p class="note">Prices: Yahoo Finance (delayed/end-of-day). Shariah: SC Malaysia SAC list (${esc(D.summary.sc?.asof || '?')}), SP Funds S&P Shariah ETF holdings, own AAOIFI-style ratio screen. News: Google News. Calendar: Forex Factory. AI: Gemini free tier (numbers-only reports if no key is set). Everything is encrypted with your password before it's published.</p>
       <div class="row"><button class="btn ghost" id="logout">LOCK &amp; FORGET PASSWORD ON THIS DEVICE</button></div></div>`)}
   </div>`;
   $('#logout').onclick = () => { store.del('k'); location.reload(); };

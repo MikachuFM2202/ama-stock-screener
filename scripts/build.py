@@ -3,7 +3,7 @@
 
 Usage: build.py daily|evening|weekly   (weekly also refreshes the universe and fundamentals)
 Env:   SITE_PASSWORD (required), OUT (output dir, default ./out), STATE (path to the data branch's
-       state.bin, optional), GITHUB_TOKEN (GitHub Models for the AI reports, optional),
+       state.bin, optional), LLM_API_KEY (+ optional LLM_BASE_URL, LLM_MODEL) for the AI reports,
        LIMIT (cap tickers per market, for quick local tests).
 
 Every file except meta.json and cache/ is AES-256-GCM encrypted with a key derived from the site
@@ -442,25 +442,32 @@ def media(old):
 
 # ---------------------------------------------------------------- AI reports
 
-def llm(system, user, model='openai/gpt-4.1-mini', max_tokens=2500):
+def llm(system, user, max_tokens=2500):
     if os.environ.get('OLLAMA_MODEL'):
         r = requests.post('http://localhost:11434/api/chat', timeout=900, json={'model': os.environ['OLLAMA_MODEL'], 'stream': False,
                           'options': {'num_ctx': 32768, 'temperature': 0.3},  # Ollama's default 2-4k context silently truncates the data
                           'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]})
         return r.json()['message']['content']
-    tok = os.environ.get('GITHUB_TOKEN')
-    if not tok: return None
-    for m in (model, 'openai/gpt-4.1-mini'):
+    # GitHub Models was retired on 2026-07-30. Any OpenAI-compatible endpoint works; the default is Gemini's free tier.
+    key = os.environ.get('LLM_API_KEY')
+    if not key: return None
+    base = os.environ.get('LLM_BASE_URL') or 'https://generativelanguage.googleapis.com/v1beta/openai'
+    models = [os.environ.get('LLM_MODEL') or 'gemini-2.5-flash', os.environ.get('LLM_FALLBACK_MODEL') or 'gemini-2.5-flash-lite']
+    try:  # model ids get retired; also try the newest "flash" models the key can see
+        ids = [x['id'].split('/')[-1] for x in requests.get(f'{base.rstrip("/")}/models', headers={'Authorization': f'Bearer {key}'}, timeout=30).json()['data']]
+        models += sorted([i for i in ids if 'flash' in i and not re.search(r'image|tts|audio|live|embed|preview|exp', i)], key=lambda i: ('lite' in i, [-int(n) for n in re.findall(r'\d+', i)]))[:2]
+    except Exception as e: print('llm model list', e)
+    for m in dict.fromkeys(models):
         try:
-            r = requests.post('https://models.github.ai/inference/chat/completions', timeout=240,
-                              headers={'Authorization': f'Bearer {tok}', 'Content-Type': 'application/json', 'Accept': 'application/json'},
+            r = requests.post(f'{base.rstrip("/")}/chat/completions', timeout=300,
+                              headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
                               json={'model': m, 'max_tokens': max_tokens, 'temperature': 0.4,
                                     'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]})
             if r.ok:
-                try: return r.json()['choices'][0]['message']['content']
-                except ValueError: return r.text
-            print('llm', m, r.status_code, r.text[:200])
-        except requests.RequestException as e: print('llm', m, e)
+                llm.used = m
+                return r.json()['choices'][0]['message']['content']
+            print('llm', m, r.status_code, r.text[:300])
+        except (requests.RequestException, ValueError, KeyError) as e: print('llm', m, e)
     return None
 
 
@@ -501,8 +508,8 @@ def _row(r, lite=False):
             'sma200': _px(r.get('sma200')), 'pe': None if not r.get('pe') else round(r['pe'], 1), 'outlook': _fc(r.get('fc'))}.items() if v not in (None, {}, '') and k not in drop}
 
 
-def report_ctx(summary, uni_rows, wl, cap=24000):
-    """GitHub Models' free tier takes ~8k input tokens per request, so the context shrinks until it fits."""
+def report_ctx(summary, uni_rows, wl, cap=int(os.environ.get('LLM_CTX_CHARS', '60000'))):
+    """Shrinks the context until it fits the provider's input limit (Gemini's free tier takes far more than this)."""
     for n in (6, 4, 3, 2, 1):
         ctx = _ctx(summary, uni_rows, wl, n)
         if len(ctx) <= cap: break
@@ -555,15 +562,16 @@ def write_report(kind, summary, uni_rows, wl):
                'entry idea, invalidation level (use SMA levels/ranges from the data) and its compliance status 6) Watchlist review, '
                'name by name 7) Risks to watch 8) What to study this week (one concept from candlesticks/technical/fundamental analysis '
                'tied to this week\'s market, plus which headlines to read). About 1800-2500 words.')
-        model, tokens = 'openai/gpt-4.1', 4000
+        tokens = 8000
     else:
         ask = ('Write the DAILY brief for today. Sections: 1) Overnight & yesterday recap (US close, Asia close) 2) What to watch today '
                '(events with SGT times, earnings, headlines that matter) 3) Outlook: today/next few days and the 1-week and 1-month bias '
                'for S&P 500, KLCI, STI, gold and oil, with probabilities/ranges 4) Shariah day-trade watch (liquid, volatile, compliant) '
                'and swing ideas, with levels 5) Watchlist notes 6) Three headlines worth reading in full. About 600-900 words.')
-        model, tokens = 'openai/gpt-4.1-mini', 2500
-    md = llm(SYSTEM, ask + '\n\nDATA (JSON):\n' + ctx, model, tokens)
-    print('llm reply', model, len(md or ''), repr((md or '')[:300]), 'ctx chars', len(ctx), flush=True)
+        tokens = 3500
+    md = llm(SYSTEM, ask + '\n\nDATA (JSON):\n' + ctx, tokens)
+    model = getattr(llm, 'used', None) or os.environ.get('LLM_MODEL') or 'gemini-2.5-flash'
+    print('llm reply', len(md or ''), 'chars, context', len(ctx), flush=True)
     if md and len(md) < 300: md = None  # a stub or refusal, not a report
     by = os.environ.get('OLLAMA_MODEL') or model if md else 'template'
     bad = unverified(md, ctx) if md else []
