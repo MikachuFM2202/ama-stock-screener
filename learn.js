@@ -587,3 +587,73 @@ export const RESOURCES = {
     ['Animal Spirits (podcast)', 'https://podcasts.apple.com/us/podcast/animal-spirits-podcast/id1310192007', 'Markets and behaviour'],
   ],
 };
+
+// Watch tab categories: channel / show name (as in scripts/build.py CHANNELS and PODCASTS) -> category.
+export const MEDIA_CATS = ['Market news', 'Investing lessons', 'Trading', 'Islamic finance', 'Singapore & Malaysia', 'Podcasts'];
+export const CHANNEL_CAT = {
+  'Bloomberg Television': 'Market news', 'CNBC Television': 'Market news', 'Yahoo Finance': 'Market news', 'CNA': 'Market news',
+  'The Plain Bagel': 'Investing lessons', 'Ben Felix': 'Investing lessons', 'Patrick Boyle': 'Investing lessons', 'Aswath Damodaran': 'Investing lessons',
+  'Rayner Teo (SG trader, price action)': 'Trading', 'StockedUp': 'Trading',
+  'Islamic Finance Guru': 'Islamic finance', 'Zoya': 'Islamic finance',
+  'Money FM 89.3': 'Singapore & Malaysia', 'Seedly': 'Singapore & Malaysia', 'Dr Wealth': 'Singapore & Malaysia',
+};
+// Podcast shows, each with its Apple Podcasts page (checked against Apple's directory 2026-10-21).
+export const PODCAST_SHOWS = [
+  ['Odd Lots (Bloomberg)', 'https://podcasts.apple.com/us/podcast/odd-lots/id1056200096', 'How markets really work', 'Market news'],
+  ['Bloomberg Surveillance', 'https://podcasts.apple.com/us/podcast/bloomberg-surveillance/id296237493', 'Daily markets and economy', 'Market news'],
+  ['Thoughts on the Market (Morgan Stanley)', 'https://podcasts.apple.com/us/podcast/thoughts-on-the-market/id1466686717', 'Short daily strategy notes', 'Market news'],
+  ['BFM Market Watch (Malaysia)', 'https://podcasts.apple.com/us/podcast/market-watch/id868001881', 'Bursa and Malaysian economy wrap', 'Singapore & Malaysia'],
+  ['The Business Times Podcasts (Singapore)', 'https://podcasts.apple.com/us/podcast/the-business-times-podcasts/id1565901403', 'SGX and Singapore business', 'Singapore & Malaysia'],
+  ['IslamicFinanceGuru', 'https://podcasts.apple.com/us/podcast/islamicfinanceguru-podcasts/id1447775029', 'Halal investing conversations', 'Islamic finance'],
+  ['Animal Spirits', 'https://podcasts.apple.com/us/podcast/animal-spirits-podcast/id1310192007', 'Markets and investor behaviour', 'Investing lessons'],
+  ['The Compound and Friends', 'https://podcasts.apple.com/us/podcast/the-compound-and-friends/id1456467014', 'Weekly market roundtable', 'Investing lessons'],
+  ['We Study Billionaires', 'https://podcasts.apple.com/us/podcast/the-investors-podcast-we-study-billionaires-the/id928933489', 'Value investing and great investors', 'Investing lessons'],
+];
+
+export const DISCLAIMER = 'For education only, not financial, investment or religious advice. Prices come from free data feeds: Bursa and SGX are delayed about 15 minutes, everything refreshes every ~10 minutes (1 minute with the optional Worker), and figures can be wrong or late. Shariah statuses are screen results, not fatwas; confirm with the official lists, your broker or a qualified scholar before you invest. Past performance and statistical outlooks do not guarantee future results.';
+
+// Shariah tab: how each status is decided, and the standards behind it.
+export const SHARIAH_STATUS = [
+  // [code, word, what it means, how a stock gets it, what to do, paper trading]
+  ['C', 'Certified', 'On an official Shariah list or held by a Shariah index fund.', 'Malaysia: on the Securities Commission (SC) Shariah Advisory Council list (updated each May and November). Elsewhere: held by SP Funds Shariah ETFs (S&P Shariah indices, overseen by a Shariah board). Shariah ETFs and sukuk funds are C.', 'Can invest. Still purify any non-halal share of dividends.', 'Allowed'],
+  ['P', 'Passes screen', 'Passes our AAOIFI-style ratio and business screen but no official body has certified it.', 'Permissible industry, interest-bearing debt under 30% of market cap and cash under 30% of market cap. The data feed does not show the non-halal revenue share, so it is not certified.', 'Check Zoya or Musaffa for the revenue breakdown before investing.', 'Allowed'],
+  ['R', 'Review', 'Not enough data, or the industry needs a revenue check.', 'Missing debt/cash data; or ratios pass but the industry often has mixed income (REITs, hotels, food and drinks, media, defence); or crypto, where scholars differ.', 'Do your own check (Zoya, Musaffa, a scholar) before investing.', 'Allowed (your call)'],
+  ['F', 'Non-compliant', 'Fails the screen or is officially non-compliant.', 'Malaysia: not on the SC list. Elsewhere: banking, insurance, interest-based lending, gambling, alcohol, tobacco, adult entertainment, or debt or cash at 30% of market cap or more. Conventional bond ETFs and meme coins are F.', 'Avoid. If you already hold it, ask your scholar how to exit and purify.', 'Blocked in Shariah-only mode'],
+  ['–', 'Not rated', 'Indices, commodity and index futures, currencies and yields.', 'These are prices to read the market, not things you own.', 'Use them for context only.', 'Not tradable'],
+];
+export const SHARIAH_STANDARDS = {
+  cols: ['Test', 'SC Malaysia (Bursa)', 'AAOIFI Standard 21', 'S&P Shariah (SPUS, SPWO)', 'MSCI Islamic', 'Dow Jones Islamic', 'This screener (P)'],
+  rows: [
+    ['Non-halal business', 'Under 5% of revenue or profit from interest, gambling, alcohol, pork, tobacco and similar; under 20% from mixed activities such as share trading or rent from non-halal tenants', 'Non-permissible income under 5% of revenue', 'Excludes non-halal industries; non-permissible income under 5%', 'Excludes non-halal industries; non-permissible income under 5%', 'Excludes non-halal industries', 'Excludes banks, insurance, lending, gambling, alcohol, tobacco and adult industries; flags mixed industries as R'],
+    ['Debt', 'Under 33% of total assets', 'Interest-bearing debt under 30% of market cap', 'Under 33% of 36-month average market cap', 'Under 33.33% of total assets', 'Under 33% of 24-month average market cap', 'Under 30% of market cap'],
+    ['Cash and interest-bearing deposits', 'Under 33% of total assets', 'Under 30% of market cap', 'Under 33% of 36-month average market cap', 'Under 33.33% of total assets', 'Under 33% of 24-month average market cap', 'Under 30% of market cap'],
+    ['Receivables', 'Not tested', 'Not tested here (some boards cap illiquid assets)', 'Receivables plus cash under 49% of 36-month average market cap', 'Receivables plus cash under 33.33% of total assets', 'Under 33% of 24-month average market cap', 'Not tested (data not in the free feed)'],
+    ['Who decides', 'SC Shariah Advisory Council, twice a year', 'Each fund\'s Shariah board applies the standard', 'S&P with a Shariah supervisory board', 'MSCI with a Shariah board', 'S&P Dow Jones with a Shariah board', 'Automatic, from Yahoo Finance data; refreshed weekly'],
+  ],
+};
+export const SHARIAH_RULES = [
+  ['Stocks', 'Owning a share is owning part of a real business, so it is permissible when the business and its finances pass the tests above.'],
+  ['Dividend purification', 'Give away the non-halal share of each dividend (for example 2% if 2% of the company\'s income is interest). Zoya and Musaffa show the figure for each stock.'],
+  ['Zakat on shares', 'Traders: 2.5% of the market value of shares held for trading. Long-term investors: many scholars use 2.5% of your share of the company\'s zakatable assets, or about 25% of market value × 2.5% as a simple estimate.'],
+  ['ETFs and unit trusts', 'Use Shariah ETFs (they track a Shariah index and have a Shariah board). Conventional index funds hold banks and other non-halal businesses.'],
+  ['Sukuk vs bonds', 'Conventional bonds pay interest (riba) and are not permissible. Sukuk give ownership in real assets or projects; SPSK is a sukuk fund.'],
+  ['Gold and silver', 'Allowed when bought spot with immediate (hand-to-hand) settlement: physical metal or a physically backed Shariah gold ETF. Futures and unallocated accounts are not.'],
+  ['Futures, options, CFDs and margin', 'Most scholars do not allow them: leverage, interest on margin, no real ownership and excessive uncertainty (gharar). Exception: Malaysia\'s SC allows Bursa crude palm oil futures (FCPO).'],
+  ['Short selling', 'Not allowed: you sell what you do not own. Paper trading here blocks it.'],
+  ['Crypto', 'Scholars differ. Some allow major coins bought spot without leverage; others, including Indonesia\'s MUI (2021), do not. Lending, "earn" and staking-for-interest products and meme coins are widely seen as not allowed.'],
+  ['Day trading', 'Generally allowed if you buy only compliant shares with your own money, take real ownership and settle properly, and avoid margin and short selling. Many scholars discourage pure speculation.'],
+];
+export const FAQ = [
+  ['Is the data live?', 'Close to it. Every stock we track gets a fresh price about every 10 minutes from GitHub, and the indices also get an intraday chart. Bursa and SGX prices from the free feed are delayed about 15 minutes. With the optional Cloudflare Worker (Settings → Family), watched symbols and indices refresh every minute. True tick-by-tick prices need a paid feed or your broker\'s app.'],
+  ['Why is a price different from my broker app?', 'Your broker shows real-time prices; ours can be up to ~15 minutes (Bursa/SGX) plus ~10 minutes (our refresh) behind. Always check the broker before you trade.'],
+  ['What do C, P, R and F mean?', 'C = Certified (official Shariah list or Shariah index), P = Passes our screen (not certified), R = needs Review, F = Non-compliant. Tap the C·P·F button at the top to show the words next to the letters. The Shariah tab explains every rule.'],
+  ['Is a P stock halal?', 'It passes the financial ratios and the industry test, but nobody has certified it and we cannot see its non-halal revenue share. Check Zoya or Musaffa (links on every stock page) before you invest.'],
+  ['Why is a Malaysian stock F when it looks fine?', 'For Bursa we follow the Securities Commission\'s official list. If the SC has not listed it, it is F here, even if the ratios look clean.'],
+  ['What does the dashboard cover?', 'Every Bursa and SGX stock in Yahoo\'s directory, US stocks above about US$2 billion, and the Shariah-index stocks in Hong Kong, China, Japan, Taiwan, Korea, Australia, Canada, Europe and Indonesia.'],
+  ['Why does tapping a sector show fewer stocks?', 'The dashboard shows every stock so you see the whole market; tapping a sector, industry or "Shariah ›" shows only the C and P stocks.'],
+  ['Are the outlooks predictions?', 'They are statistics: how often prices rose after the same trend score in the last two years, with a 68% range. They are often wrong and are not advice.'],
+  ['Is my data private?', 'Everything is encrypted with the family password before it is stored, but the repository is public, so use a long password. Profile PINs stop casual switching only.'],
+  ['Does Paper trading use real money?', 'No. It is virtual money (default S$1,500) with realistic fees and board lots, to practise.'],
+  ['How do I get notifications?', 'Settings → Notifications on this device. On iPhone, add the site to the Home Screen first.'],
+  ['Can I trade from here?', 'No. Use moomoo, Malacca Securities (M+) or UOB Kay Hian. The site links to each stock\'s page there.'],
+];

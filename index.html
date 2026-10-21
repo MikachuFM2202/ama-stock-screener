@@ -14,11 +14,11 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-180.png">
-<link rel="stylesheet" href="style.css?v=20261021144307">
+<link rel="stylesheet" href="style.css?v=20261021151554">
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" integrity="sha384-stKllnUqA9AD0gsKCuUtf5XlqAW7PwIgDagoNsTWkjkBmJ/GZ/uHTgEBxdLV2VSK" crossorigin="anonymous" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js" integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous" defer></script>
-<script type="module" src="app.js?v=20261021144307"></script>
+<script type="module" src="app.js?v=20261021151554"></script>
 </head>
 <body>
 <div id="login" class="login" hidden>
@@ -30,6 +30,7 @@
     <label class="check"><input id="remember" type="checkbox" checked> Remember on this device</label>
     <button type="submit" class="btn">UNLOCK</button>
     <p id="loginMsg" class="err" role="alert"></p>
+    <p class="note">For education only: not financial or religious advice. Prices are delayed and can be wrong; Shariah statuses are screen results, not fatwas.</p>
   </form>
 </div>
 <div id="who" class="login" hidden></div>
@@ -41,6 +42,7 @@
       <datalist id="cmdList"></datalist>
       <button type="submit">GO</button>
     </form>
+    <button id="stt" class="stt" aria-pressed="false" title="Show what the Shariah letters mean (C = Certified, P = Passes screen, R = Review, F = Non-compliant)">C·P·F</button>
     <button id="refresh" class="icon-btn" title="Refresh data now" aria-label="Refresh data now">⟳</button>
     <div class="clock" id="clock"></div>
     <button id="me" class="avatar" title="Switch profile" aria-label="Switch profile"></button>

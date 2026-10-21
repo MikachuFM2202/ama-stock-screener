@@ -214,13 +214,13 @@ def build_universe():
     sc = sc_list()
     spf = sp_funds()
     uni = {}
-    for q in screen('KLS', 3e8, 600):  # Bursa, market cap > RM300m
+    for q in screen('KLS', 1e6, 1500):  # every Bursa stock Yahoo lists (~1,050)
         code = q['symbol'].split('.')[0]
         uni[q['symbol']] = {'m': 'MY', 'n': q.get('longName') or q.get('shortName'), 'sc': code in sc['codes']}
-    for q in screen('SES', 1.5e8, 400):  # SGX, market cap > S$150m
+    for q in screen('SES', 1e6, 1000):  # every SGX stock Yahoo lists (~520)
         uni[q['symbol']] = {'m': 'SG', 'n': q.get('longName') or q.get('shortName')}
     for ex in ('NMS', 'NYQ'):
-        for q in screen(ex, 1.5e10, 450):  # US large caps > US$15b
+        for q in screen(ex, 2e9, 1500):  # US mid and large caps > US$2b (~2,000)
             uni[q['symbol'].replace('.', '-')] = {'m': 'US', 'n': q.get('longName') or q.get('shortName')}
     for y, h in spf.items():
         mk = 'US' if '.' not in y else 'GL'
@@ -235,7 +235,8 @@ def build_universe():
 
 FUND_KEYS = ['sector', 'industry', 'marketCap', 'totalDebt', 'totalCash', 'trailingPE', 'forwardPE', 'priceToBook', 'returnOnEquity',
              'profitMargins', 'revenueGrowth', 'earningsGrowth', 'dividendYield', 'beta', 'currency', 'longBusinessSummary', 'website',
-             'earningsTimestamp', 'recommendationKey', 'targetMeanPrice', 'numberOfAnalystOpinions', 'longName', 'quoteType']
+             'earningsTimestamp', 'recommendationKey', 'targetMeanPrice', 'numberOfAnalystOpinions', 'longName', 'quoteType',
+             'heldPercentInstitutions', 'heldPercentInsiders']
 
 
 def fundamentals(syms, old):
@@ -384,6 +385,57 @@ def snap(I, s):
             'hi52': v(I['hi252']), 'lo52': v(I['lo252']), 'hi20': v(I['hi20'])}
 
 
+# Pattern finder (dashboard): chart and candlestick setups on the latest daily bar.
+PATTERN_NAMES = {'hi52': 'New 52-week high', 'lo52': 'New 52-week low', 'golden': 'Golden cross (50-day over 200-day)', 'death': 'Death cross (50-day under 200-day)',
+                 'brk20': '20-day breakout on volume', 'volspike': 'Volume spike (3x average)', 'oversold': 'RSI oversold (under 30)', 'overbought': 'RSI overbought (over 70)',
+                 'engulf': 'Bullish engulfing', 'bearengulf': 'Bearish engulfing', 'hammer': 'Hammer after a drop', 'gapup': 'Gap up (over 2%)',
+                 'gapdown': 'Gap down (over 2%)', 'inside': 'Inside day (range squeeze)'}
+
+
+def patterns(P, I):
+    out = {}
+    for s in I['raw'].columns:
+        c = I['raw'][s].dropna()
+        if len(c) < 60: continue
+        idx = c.index
+        o, h, l, v = (P[k][s].reindex(idx) for k in ('Open', 'High', 'Low', 'Volume'))
+        O1, H1, L1, C1, O0, H0, L0, C0 = o.iloc[-1], h.iloc[-1], l.iloc[-1], c.iloc[-1], o.iloc[-2], h.iloc[-2], l.iloc[-2], c.iloc[-2]
+        if any(pd.isna(x) or x <= 0 for x in (O1, H1, L1, O0, H0, L0)): continue
+        f, prior = [], c.iloc[-253:-1]
+        if len(prior) >= 120 and C1 > prior.max(): f.append('hi52')
+        if len(prior) >= 120 and C1 < prior.min(): f.append('lo52')
+        s50, s200 = I['sma'][50][s].reindex(idx), I['sma'][200][s].reindex(idx)
+        if s50.iloc[-1] > s200.iloc[-1] and (s50.iloc[-4:-1] <= s200.iloc[-4:-1]).any(): f.append('golden')
+        if s50.iloc[-1] < s200.iloc[-1] and (s50.iloc[-4:-1] >= s200.iloc[-4:-1]).any(): f.append('death')
+        va = v.iloc[-21:-1].mean()
+        if va > 0 and C1 > c.iloc[-21:-1].max() and v.iloc[-1] > 1.5 * va: f.append('brk20')
+        if va > 0 and v.iloc[-1] > 3 * va: f.append('volspike')
+        r = I['rsi'][s].reindex(idx).iloc[-1]
+        if r < 30: f.append('oversold')
+        if r > 70: f.append('overbought')
+        if C0 < O0 and C1 > O1 and O1 <= C0 and C1 >= O0: f.append('engulf')
+        if C0 > O0 and C1 < O1 and O1 >= C0 and C1 <= O0: f.append('bearengulf')
+        body = abs(C1 - O1)
+        if body > 0 and min(O1, C1) - L1 >= 2 * body and H1 - max(O1, C1) <= body and C0 < c.iloc[-6]: f.append('hammer')
+        if L1 > H0 * 1.02: f.append('gapup')
+        if H1 < L0 * .98: f.append('gapdown')
+        if H1 < H0 and L1 > L0: f.append('inside')
+        if f: out[s] = f
+    return out
+
+
+def intraday(syms):
+    """5-minute closes for today's (or the last) session: the dashboards' 1-day index charts."""
+    try: d = yf.download(syms, period='1d', interval='5m', auto_adjust=False, progress=False, threads=True, group_by='column')['Close']
+    except Exception as e: print('intraday', e); return {}
+    if isinstance(d, pd.Series): d = d.to_frame(syms[0])
+    out = {}
+    for s in d.columns:
+        c = d[s].dropna()
+        if len(c) > 2: out[s] = {'t0': int(c.index[0].timestamp()), 'c': [round(float(x), 4) for x in c]}
+    return out
+
+
 # ---------------------------------------------------------------- news, calendar, media
 
 NEWS_Q = [('Global', 'stock market today'), ('US', 'Wall Street stocks Fed'), ('Malaysia', 'Bursa Malaysia KLCI'),
@@ -426,7 +478,7 @@ def gnews(q, n=8, days=1, when=None):
 
 def yt_search(q, must=None, n=1):
     """Direct videos for a topic (YouTube's search page, videos only), checked via oEmbed so every link is a real, public video.
-    `must`: a word the title or channel has to contain (keeps company searches on the company)."""
+    `must`: a regex the title or channel has to match (keeps searches on topic and drops clickbait that only shares a word)."""
     r = http('https://www.youtube.com/results', tries=2, params={'search_query': q, 'sp': 'EgIQAQ=='}, cookies={'CONSENT': 'YES+1'})
     out = []
     for vid in list(dict.fromkeys(re.findall(r'"videoId":"([\w-]{11})"', r.text if r else '')))[:6]:
@@ -434,7 +486,7 @@ def yt_search(q, must=None, n=1):
         if not o: continue
         j = o.json()
         t, ch = j.get('title', ''), j.get('author_name', '')
-        if not relevant(t, need_market=False) or (must and must.lower() not in (t + ' ' + ch).lower()): continue
+        if not relevant(t, need_market=False) or (must and not re.search(must, t + ' ' + ch, re.I)): continue
         out.append({'id': vid, 't': t, 'src': ch})
         if len(out) >= n: break
     return out
@@ -485,18 +537,20 @@ CHANNELS = [('Rayner Teo (SG trader, price action)', 'UCES1CX-L4242aZELJyz-6QA')
 
 
 # Study plan (Watch tab): each topic resolves to one direct video, refreshed weekly.
-STUDY = [('Candlestick basics (Rayner Teo)', 'Rayner Teo candlestick patterns trading guide', 'A Singapore-based trader with clear price-action lessons. Start here for the EDU candles chapter.'),
-         ('Support and resistance properly', 'Rayner Teo support and resistance', 'The single most useful chart skill.'),
-         ('Position sizing and risk', 'position sizing explained trading risk management 1 percent rule', 'Stops and sizing matter more than entries.'),
-         ('How to read an annual report', 'how to read an annual report for beginners investing', 'Fundamental basics.'),
-         ('Valuation (Damodaran)', 'Aswath Damodaran valuation class intrinsic value', 'The best free valuation teaching anywhere.'),
-         ('Shariah stock screening explained', 'Islamic Finance Guru how to check if a stock is halal', 'How screens work and their limits.'),
-         ('Purifying dividends', 'how to purify dividends halal investing', 'The practical step most people skip.'),
-         ('Is day trading halal?', 'is day trading halal scholars', 'Hear the scholarly views directly.'),
-         ('Reading the economic calendar', 'how CPI and FOMC affect stock market explained', 'Why stocks jump on data days.'),
-         ('Bursa Malaysia for beginners', 'how to invest in Bursa Malaysia beginners', 'Local market mechanics.'),
-         ('US estate tax for Singapore investors', 'US estate tax Singapore investors Ireland domiciled ETF', 'An overlooked risk for Asia-based investors.'),
-         ('VWAP and opening range (intraday)', 'VWAP opening range breakout strategy explained', 'If you do day trade, learn these first.')]
+STUDY = [  # (topic, YouTube query, why, regex the chosen video's title/channel must match)
+    ('Candlestick basics (Rayner Teo)', 'Rayner Teo candlestick patterns trading guide', 'A Singapore-based trader with clear price-action lessons. Start here for the EDU candles chapter.', r'candlestick'),
+    ('Support and resistance properly', 'Rayner Teo support and resistance', 'The single most useful chart skill.', r'support and resistance'),
+    ('Position sizing and risk', 'position sizing explained trading risk management 1 percent rule', 'Stops and sizing matter more than entries.', r'position siz'),
+    ('How to read an annual report', 'how to read a company annual report for stock investors', 'Fundamental basics.', r'annual report|10-k'),
+    ('Valuation (Damodaran)', 'Aswath Damodaran valuation class intrinsic value', 'The best free valuation teaching anywhere.', r'damodaran'),
+    ('Shariah stock screening explained', 'Islamic Finance Guru shariah stock screening', 'How screens work and their limits.', r'(halal|shariah|islamic).*(screen|check|criteria|compliant)|(screen|check|criteria|compliant).*(halal|shariah|islamic)'),
+    ('Purifying dividends', 'how to purify dividends halal investing', 'The practical step most people skip.', r'purif'),
+    ('Is day trading halal?', 'is day trading halal scholars', 'Hear the scholarly views directly.', r'day trading'),
+    ('Reading the economic calendar', 'how CPI and FOMC affect stock market explained', 'Why stocks jump on data days.', r'cpi|fomc|economic calendar'),
+    ('Bursa Malaysia for beginners', 'how to invest in Bursa Malaysia beginners', 'Local market mechanics.', r'bursa'),
+    ('US estate tax for Singapore investors', 'US estate tax Singapore investors Ireland domiciled ETF', 'An overlooked risk for Asia-based investors.', r'estate tax|ireland'),
+    ('VWAP and opening range (intraday)', 'VWAP opening range breakout strategy explained', 'If you do day trade, learn these first.', r'vwap|opening range'),
+]
 
 
 def media(old, watch=()):
@@ -517,19 +571,19 @@ def media(old, watch=()):
         for e in [e for e in feedparser.parse(r.content).entries[:10] if e.get('yt_videoid') and fresh(e) and relevant(e.get('title'))][:4]:
             vids.append({'src': name, 't': e.get('title'), 'id': e.get('yt_videoid'), 'at': e.get('published')})
     study = old.get('study') or []
-    if MODE == 'weekly' or len(study) < len(STUDY) // 2:
+    if MODE == 'weekly' or len(study) < len(STUDY) // 2 or not old.get('study_v'):  # study_v: re-pick once with the topic filters
         got = []
-        for t, q, why in STUDY:
-            v = yt_search(q)
+        for t, q, why, must in STUDY:
+            v = yt_search(q, must=must)
             if v: got.append({**v[0], 'topic': t, 'why': why})
-        if len(got) >= len(study): study = got
+        if len(got) >= len(STUDY) // 2: study = got
     # Watchlist names: one or two recent videos that actually mention the company (no search pages on the site).
     wl = {}
     for w in watch[:25]:
         first = re.sub(r'[^\w ]', '', w['n']).split(' ')[0] if w.get('n') and w['n'] != w['s'] else w['s'].split('.')[0]
-        try: wl[w['s']] = yt_search(f'{w["n"]} stock', must=first, n=2)
+        try: wl[w['s']] = yt_search(f'{w["n"]} stock', must=re.escape(first), n=2)
         except Exception as e: print('yt', w['s'], e)
-    return {'pods': pods, 'vids': vids, 'study': study, 'wl': {k: v for k, v in wl.items() if v}}
+    return {'pods': pods, 'vids': vids, 'study': study, 'study_v': 2, 'wl': {k: v for k, v in wl.items() if v}}
 
 
 # ---------------------------------------------------------------- small-account strategies (scan + backtest)
@@ -874,15 +928,15 @@ def main():
     fam = family_symbols(profs)
     wl = [{'s': s, 'n': n} for s, n in fam.items()]
 
-    uni = cache_get('universe.json')
+    uni = cache_get('universe-v2.json')  # v2 (2026-10-21): whole Bursa/SGX + US > $2b; the new name forces one rebuild
     sc = cache_get('sc.json', {})
     if MODE == 'weekly' or not uni:
         uni, sc = build_universe()
-        cache_put('universe.json', uni)
+        cache_put('universe-v2.json', uni)
     print('universe', len(uni))
 
     fund = cache_get('fund.json', {})
-    stale = [s for s in uni if s not in fund or MODE == 'weekly' and (fund[s] or {}).get('at', '') < (NOW - dt.timedelta(days=6)).date().isoformat()]
+    stale = [s for s in uni if s not in fund or 'heldPercentInstitutions' not in (fund[s] or {}) or MODE == 'weekly' and (fund[s] or {}).get('at', '') < (NOW - dt.timedelta(days=6)).date().isoformat()]
     stale += [w['s'] for w in wl if w['s'] not in fund and w['s'] not in uni]
     if stale:
         print('fundamentals', len(stale))
@@ -911,6 +965,7 @@ def main():
         if s in have: groups[u['m']].append(s)
     cal = {g: calibrate(I, cols) for g, cols in groups.items() if cols}
 
+    pats = patterns(P, I)
     rows = []
     for s, u in uni.items():
         if s not in have: continue
@@ -927,6 +982,7 @@ def main():
                      'cm': (f.get('totalCash') or 0) / f['marketCap'] if f.get('marketCap') and f.get('totalCash') is not None else None,
                      'tgt': f.get('targetMeanPrice'), 'rec': f.get('recommendationKey'), 'ana': f.get('numberOfAnalystOpinions'),
                      'earn': f.get('earningsTimestamp'), 'web': f.get('website'), 'about': f.get('longBusinessSummary'),
+                     'inst': f.get('heldPercentInstitutions'), 'insd': f.get('heldPercentInsiders'), 'pat': pats.get(s),
                      'valusd': x['val'] / rate if x.get('val') and rate else None, **x,
                      'bias': label(x['score'] or 0), 'fc': forecast(x['px'], x['score'] or 0, x['vol'], cal.get(u['m'], {}))})
     by = {r['s']: r for r in rows}
@@ -984,7 +1040,7 @@ def main():
                        and (r['s'] in {w['s'] for w in wl} or r['st'] == 'C' and (r.get('mc') or 0) > 5e10)], key=lambda e: e['at'])
     summary = {'at': NOW.isoformat(), 'mode': MODE, 'macro': macro, 'ideas': {k: [slim(r) for r in v] for k, v in ideas.items()},
                'movers': {k: [slim(r) for r in v] for k, v in movers.items()}, 'track': track,
-               'cal': {g: {str(h): t for h, t in c.items()} for g, c in cal.items()},
+               'cal': {g: {str(h): t for h, t in c.items()} for g, c in cal.items()}, 'patnames': PATTERN_NAMES,
                'sc': {k: sc.get(k) for k in ('asof', 'url', 'patched')}, 'counts': count(rows),
                'calendar': calendar(), 'earnings': earnings, 'news': news([by[w['s']] for w in wl if w['s'] in by] + [{'s': w['s'], 'n': w['s']} for w in wl if w['s'] not in by]),
                'media': media(old.get('media'), [{'s': w['s'], 'n': by[w['s']]['n'] if w['s'] in by else w['s']} for w in wl]), 'reports': old.get('reports', []), 'fx': fx}
@@ -1150,7 +1206,8 @@ def live_main(profs):
     if 'GBP' in fx: fx['GBp'] = fx['GBP'] * 100
     news = breaking()
     LIVE_OUT.mkdir(parents=True, exist_ok=True)
-    (LIVE_OUT / 'live.bin').write_bytes(seal({'at': NOW.isoformat(), 'q': q, 'fx': fx, 'news': news}))
+    intra = intraday([s for g in ('Indices', 'Futures') for s, *_ in MACRO[g]])
+    (LIVE_OUT / 'live.bin').write_bytes(seal({'at': NOW.isoformat(), 'q': q, 'fx': fx, 'news': news, 'intra': intra}))
     try: sent = unseal((LIVE_OUT / 'alerts.bin').read_bytes())
     except Exception: sent = {}
     today, jobs = NOW.date().isoformat(), []

@@ -60,4 +60,11 @@ assert [s['endpoint'] for s in _j.load(open(os.environ['PUSH_OUT']))['jobs'][0][
 # news/video relevance: market stories stay, sport/showbiz/crime/shorts go
 assert all(b.relevant(t) for t in ['Fed holds rates, stocks rally', 'Oil jumps as OPEC cuts output', 'How to Trade Breakouts'])
 assert not any(b.relevant(t) for t in ['Malaysia wins badminton gold', 'Actress stuns at gala', 'Man stabbed in Woodlands', 'Quit my job #shorts', 'Best hawker food in Penang', 'Who You Marry Is a Financial Decision', 'Analyst Reacts to Finance TikToks'])
+# pattern finder: a bullish engulfing on the last bar is found
+import numpy as _np, pandas as _pd
+_ix = _pd.bdate_range('2025-01-01', periods=80)
+_c = _pd.Series(_np.linspace(100, 90, 80), _ix); _o = _c + .2
+_o.iloc[-2], _c.iloc[-2] = 91, 90; _o.iloc[-1], _c.iloc[-1] = 89.5, 92
+_P = {k: _pd.DataFrame({'X': v}) for k, v in {'Open': _o, 'High': _pd.concat([_o, _c], axis=1).max(axis=1) + .1, 'Low': _pd.concat([_o, _c], axis=1).min(axis=1) - .1, 'Close': _c, 'Volume': _pd.Series(1e5, _ix)}.items()}
+assert 'engulf' in b.patterns(_P, b.indicators(_P)).get('X', []), b.patterns(_P, b.indicators(_P))
 print('ok')
