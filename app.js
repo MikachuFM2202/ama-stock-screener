@@ -269,6 +269,7 @@ async function loadLive() {
     } catch (e) { console.warn('worker', e); }
   }
   if (!data) { try { data = await readBranch('live', 'live.bin'); liveFrom = 'github'; } catch {} }
+  else { const g = await readBranch('live', 'live.bin').catch(() => null); if (g?.q) data.q = { ...g.q, ...data.q }; }  // Worker covers ~180 symbols; the GitHub file has the whole universe
   if (!data) return false;
   const changed = !LIVE || data.at !== LIVE.at;
   LIVE = data; applyLive(); paintTicker(); tick();
@@ -422,11 +423,11 @@ function mooCode(s) {
 
 // ---------------------------------------------------------------- shell
 // ---------------------------------------------------------------- shell
-const TABS = [['mkt', 'MKT', 'Market'], ['etf', 'ETF', 'ETFs'], ['cmdty', 'CMDY', 'Commodities'], ['crypto', 'CRYP', 'Crypto'], ['fut', 'FUT', 'Futures'], ['bonds', 'BOND', 'Bonds'],
+const TABS = [['mkt', 'MKT', 'Market'], ['dash', 'DASH', 'Dashboard'], ['etf', 'ETF', 'ETFs'], ['cmdty', 'CMDY', 'Commodities'], ['crypto', 'CRYP', 'Crypto'], ['fut', 'FUT', 'Futures'], ['bonds', 'BOND', 'Bonds'],
   ['brief', 'BRF', 'Reports'], ['quick', 'SMLL', 'Small account'], ['ideas', 'IDEA', 'Ideas'], ['screen', 'SCRN', 'Screener'],
   ['wl', 'WL', 'Watchlist'], ['paper', 'PAPR', 'Paper'], ['notes', 'NOTE', 'Notes'], ['news', 'NEWS', 'News'],
   ['media', 'TV', 'Watch'], ['learn', 'EDU', 'Learn'], ['glossary', 'GLOS', 'Terms'], ['settings', 'SET', 'Settings']];
-const BNAV = ['mkt', 'quick', 'wl', 'paper'];
+const BNAV = ['mkt', 'dash', 'quick', 'wl', 'paper'];
 let cleanup = [], lastDispatch = 0, fastPoll = 0;
 function shell() {
   $('#tabs').innerHTML = TABS.map(([id, k, n]) => `<a href="#${id}" data-tab="${id}"><b>${k}</b>${n}</a>`).join('');
@@ -470,7 +471,7 @@ let lastTouch = 0;
 // swapping the DOM mid-tap eats the tap.
 function softRoute() {
   const v = location.hash.slice(1).split('/')[0] || P().home;
-  if (!['mkt', 'wl', 'paper', 'ideas', 'screen', 'quick'].includes(v)) return;
+  if (!['mkt', 'dash', 'wl', 'paper', 'ideas', 'screen', 'quick'].includes(v)) return;
   if (typing() || Date.now() - lastTouch < 2500) { clearTimeout(softRoute.t); softRoute.t = setTimeout(softRoute, 2500); return; }
   route(true);
 }
@@ -601,6 +602,107 @@ for (const [id, g, title, note] of ASSETS) VIEWS[id] = async (_, main) => {
     ${panel('Shariah view', `<p class="pb">${esc(note)}</p>`, '', 'span')}</div>`;
 };
 
+// Region dashboards (moomoo-style): index cards, movers, most active, high dividends and a heat map for every stock we
+// track in the region, whatever its status. Tapping a sector, industry or "More" opens only the Shariah-compliant (C+P)
+// names in the screener. Prices are the live quotes (whole universe, every ~10 min) over the daily snapshot.
+const REGIONS = [
+  ['MY', 'Malaysia', 'MY', null, ['^KLSE', '0821EA.KL', '0824EA.KL']],
+  ['SG', 'Singapore', 'SG', null, ['^STI', 'SGD=X', 'SGDMYR=X']],
+  ['US', 'United States', 'US', null, ['^GSPC', '^IXIC', '^DJI', '^NDX', '^RUT', '^SOX']],
+  ['HK', 'Hong Kong & China', 'GL', ['HK', 'SS', 'SZ'], ['^HSI', '000001.SS', '^HSCE', '399001.SZ']],
+  ['JP', 'Japan', 'GL', ['T'], ['^N225']],
+  ['TW', 'Taiwan', 'GL', ['TW'], ['^TWII']],
+  ['KR', 'Korea', 'GL', ['KS'], ['^KS11']],
+  ['AU', 'Australia', 'GL', ['AX'], ['^AXJO']],
+  ['CA', 'Canada', 'GL', ['TO'], ['^GSPTSE']],
+  ['EU', 'Europe', 'GL', ['L', 'SW', 'AS', 'MI', 'HE', 'CO', 'MC'], ['^STOXX50E', '^FTSE', '^GDAXI', '^FCHI']],
+  ['ID', 'Indonesia', 'GL', ['JK'], ['^JKSE', '^JKII']]];
+const scrLink = (m, { sec = '', ind = '', sort = '', sfx = '' } = {}) => `#screen/${[m, sec, 'CP', ind, sort, sfx].map(encodeURIComponent).join('|')}`;
+// Binary-split treemap: halves the (sorted) items by weight and cuts the longer side, recursively. Coordinates in %.
+function treemap(items, R, x = 0, y = 0, w = 100, h = 100, out = []) {
+  if (!items.length) return out;
+  if (items.length === 1) { out.push({ ...items[0], x, y, w, h }); return out; }
+  const tot = items.reduce((a, b) => a + b.wt, 0);
+  let i = 1, acc = items[0].wt;
+  while (i < items.length - 1 && acc + items[i].wt <= tot / 2) acc += items[i++].wt;
+  const f = acc / tot;
+  if (w * R >= h) { treemap(items.slice(0, i), R, x, y, w * f, h, out); treemap(items.slice(i), R, x + w * f, y, w * (1 - f), h, out); }
+  else { treemap(items.slice(0, i), R, x, y, w, h * f, out); treemap(items.slice(i), R, x, y + h * f, w, h * (1 - f), out); }
+  return out;
+}
+const heatBg = c => c == null ? '#262626' : `hsl(${c >= 0 ? 145 : 0}, ${c >= 0 ? 55 : 60}%, ${(13 + 24 * Math.min(1, Math.abs(c) / 0.03)).toFixed(0)}%)`;
+let dashSel = {}, dashHeat = 'sec';
+VIEWS.dash = async (arg, main) => {
+  const U = await universe(); applyLive();
+  const [rid] = (arg || '').split('/');
+  const reg = REGIONS.find(r => r[0] === rid) || REGIONS.find(r => r[0] === ({ GL: 'HK' }[P().mkt] || P().mkt)) || REGIONS[0];
+  const [id, name, m, sfx, idx] = reg;
+  const rows = U.filter(r => r.m === m && (!sfx || sfx.includes(r.s.split('.').pop())) && r.px);
+  const idxRows = idx.map(macroRow).filter(Boolean);
+  const sel = macroRow(dashSel[id]) || idxRows[0];
+  const code = r => r.s.endsWith('.KL') || r.s.endsWith('.SI') ? r.s.split('.')[0] : r.s;
+  const usd = r => { const q = LIVE?.q?.[r.s]; const v = q?.v && q.d === r.d ? q.v * q.p / (D.fx?.[r.cur] || NaN) : NaN; return isFinite(v) && v > 0 ? v : r.valusd; };
+  const list = (title, rs, val, more) => panel(title, `<div class="tw"><table class="dl"><thead><tr><th class="l">Symbol</th><th class="l">Name</th><th>${val[0]}</th><th>Price</th></tr></thead><tbody>${rs.map(r => `<tr class="go" data-go="stock/${encodeURIComponent(r.s)}"><td class="l sym">${esc(code(r))}</td><td class="l nm">${esc(r.n)} ${badge(r.st)}</td><td>${val[1](r)}</td><td>${px(r.px)}</td></tr>`).join('') || '<tr><td class="muted l" colspan="4">No data yet.</td></tr>'}</tbody></table></div>`,
+    `<a class="note" href="${more}">Shariah ›</a>`);
+  const by = (k, dir = -1) => [...rows].filter(r => r[k] != null).sort((a, b) => (a[k] - b[k]) * dir);
+  const gain = by('r1').filter(r => r.r1 > 0).slice(0, 8), lose = by('r1', 1).filter(r => r.r1 < 0).slice(0, 8);
+  const hot = [...rows].sort((a, b) => (usd(b) || 0) - (usd(a) || 0)).slice(0, 8);
+  const div = by('dy').filter(r => r.dy > 0 && r.dy < 25).slice(0, 8);  // ponytail: >25% yields are usually one-off specials or bad data
+  // heat map groups: weight = market cap, change = cap-weighted 1-day move
+  const wt = r => r.mc || (r.valusd || 1e5) * 50;
+  let tiles;
+  if (dashHeat === 'stk') tiles = [...rows].sort((a, b) => wt(b) - wt(a)).slice(0, 60).map(r => ({ k: code(r), sub: r.s, wt: wt(r), c: r.r1, href: `#stock/${encodeURIComponent(r.s)}` }));
+  else {
+    const g = {};
+    for (const r of rows) { const k = r[dashHeat] || 'Other'; const x = g[k] ||= { k, wt: 0, cw: 0, n: 0 }; x.wt += wt(r); if (r.r1 != null) { x.cw += wt(r) * r.r1; x.n += wt(r); } }
+    tiles = Object.values(g).map(x => ({ ...x, c: x.n ? x.cw / x.n : null, href: scrLink(m, { [dashHeat]: x.k === 'Other' ? '' : x.k, sfx: sfx?.join(',') }) }));
+  }
+  tiles.sort((a, b) => b.wt - a.wt);
+  const H = innerWidth < 760 ? 380 : 470, R = Math.min(1.6, (innerWidth < 760 ? innerWidth - 60 : 520) / H);
+  const heat = treemap(tiles, R).map(t => `<a class="tile${t.w * t.h < 60 ? ' xs' : ''}" href="${esc(t.href)}" style="left:${t.x}%;top:${t.y}%;width:${t.w}%;height:${t.h}%;background:${heatBg(t.c)}" title="${esc(t.k)} ${t.c == null ? '' : (t.c * 100).toFixed(2) + '%'}"><b>${esc(t.k)}</b><span>${t.c == null ? '' : (t.c > 0 ? '+' : '') + (t.c * 100).toFixed(2) + '%'}</span></a>`).join('');
+  const liveAt = LIVE?.at ? `live ${esc(sgt(LIVE.at, { hour: '2-digit', minute: '2-digit' }))} SGT${Date.now() - Date.parse(LIVE.at) > 30 * 60000 ? ' (stale)' : ''}` : 'snapshot prices';
+  const card = r => `<button class="icard ${r.s === sel?.s ? 'on' : ''} ${cls(r.r1)}" data-idx="${esc(r.s)}"><b>${esc(r.n)}</b><span class="big">${px(r.px)}</span>${pct(r.r1)}<i data-sp="${esc(r.s)}"></i></button>`;
+  main.innerHTML = `<div class="chips dreg">${REGIONS.map(r => `<a class="chip ${r[0] === id ? 'on' : ''}" href="#dash/${r[0]}">${esc(r[1])}</a>`).join('')}
+      <span class="sep"></span>${ASSETS.map(([aid, , t]) => `<a class="chip" href="#${aid}">${esc(t)}</a>`).join('')}</div>
+    <div class="dash">
+      <div class="dmain">
+        <div class="icards">${idxRows.slice(0, 3).map(card).join('') || '<p class="muted">Index data arrives with the next market update.</p>'}</div>
+        <div class="dgrid">
+          ${list('Top gainers', gain, ['% Chg', r => pct(r.r1)], scrLink(m, { sort: 'r1:-1', sfx: sfx?.join(',') }))}
+          ${list('Top losers', lose, ['% Chg', r => pct(r.r1)], scrLink(m, { sort: 'r1:1', sfx: sfx?.join(',') }))}
+          ${panel('Heat map', `<div class="heat" style="height:${H}px">${heat || '<p class="pb muted">No data.</p>'}</div><p class="note pb">Size = market cap, colour = today's move. Tap a ${dashHeat === 'stk' ? 'stock' : 'block for its Shariah-compliant names'}.</p>`,
+            `<div class="seg">${[['sec', 'Sector'], ['ind', 'Industry'], ['stk', 'Stock']].map(([k, t]) => `<button class="${dashHeat === k ? 'on' : ''}" data-heat="${k}">${t}</button>`).join('')}</div>`, 'dheat')}
+          ${list('Most active (turnover)', hot, ['Turnover', r => '$' + big(usd(r))], scrLink(m, { sort: 'valusd:-1', sfx: sfx?.join(',') }))}
+          ${list('High dividends', div, ['Div yield', r => r.dy.toFixed(2) + '%'], scrLink(m, { sort: 'dy:-1', sfx: sfx?.join(',') }))}
+        </div>
+        <p class="note">${esc(name)}: ${rows.length} stocks tracked (${rows.filter(r => 'CP'.includes(r.st)).length} Shariah-compliant)${m === 'GL' ? ', Shariah-index names only' : ', every status'} · ${liveAt} · Bursa/SGX quotes delayed ~15 min.</p>
+      </div>
+      <aside class="dside panel" id="dside"></aside>
+    </div>`;
+  const side = async () => {
+    const r = macroRow(dashSel[id]) || idxRows[0], el = $('#dside');
+    if (!r || !el) { if (el) el.innerHTML = ''; return; }
+    const q = LIVE?.q?.[r.s] || {}, prev = q.p && q.c != null ? q.p / (1 + q.c) : null;
+    el.innerHTML = `<div class="pb"><div class="row"><b class="amber">${esc(r.s)}</b> <span>${esc(r.n)}</span></div>
+      <div class="big ${cls(r.r1)}">${px(r.px)}</div><div>${pct(r.r1)} <small class="dim">${esc(r.d || '')}</small></div>
+      <div class="kv">${kv([['High', px(q.h)], ['Low', px(q.l)], ['Prev close', px(prev)], ['52wk high', px(r.hi52)], ['52wk low', px(r.lo52)], ['1W', pct(r.r5)], ['1M', pct(r.r21)], ['YTD', pct(r.ytd)], ['RSI', r.rsi?.toFixed(0) ?? '–'], ['Trend', biasHtml(r.bias)]])}</div>
+      <div id="dch" class="dch"></div>
+      ${idxRows.length > 1 ? `<div class="chips">${idxRows.map(x => `<button class="chip ${x.s === r.s ? 'on' : ''}" data-idx="${esc(x.s)}">${esc(x.n)}</button>`).join('')}</div>` : ''}
+      <p><a class="btn sm ghost" href="#stock/${encodeURIComponent(r.s)}">FULL CHART ›</a></p></div>`;
+    $$('[data-idx]', el).forEach(b => b.onclick = () => { dashSel[id] = b.dataset.idx; route(true); });
+    const bars = await mk(`ohlc/${r.s.replace(/[^A-Za-z0-9.-]/g, '_')}.bin`).catch(() => null);
+    const c = bars?.c?.filter(x => x != null).slice(-130);
+    if (c?.length > 2 && $('#dch')) { if (r.px) c.push(r.px); $('#dch').innerHTML = spark(c) + `<div class="row note"><span>6 months</span><span>${px(Math.min(...c))} – ${px(Math.max(...c))}</span></div>`; }
+  };
+  $$('.icard', main).forEach(b => b.onclick = () => { dashSel[id] = b.dataset.idx; route(true); });
+  $$('[data-heat]', main).forEach(b => b.onclick = () => { dashHeat = b.dataset.heat; route(true); });
+  side();
+  for (const r of idxRows.slice(0, 3)) mk(`ohlc/${r.s.replace(/[^A-Za-z0-9.-]/g, '_')}.bin`).then(b => {
+    const c = b?.c?.filter(x => x != null).slice(-60), el = main.querySelector(`[data-sp="${CSS.escape(r.s)}"]`);
+    if (c?.length > 2 && el) el.innerHTML = spark(c);
+  }).catch(() => {});
+};
+
 VIEWS.mkt = async (_, main) => {
   const S = D.summary;
   const key = ['^GSPC', '^IXIC', '^KLSE', '^STI', 'GC=F', 'CL=F', 'SGD=X', 'MYR=X'].map(macroRow).filter(Boolean);
@@ -671,8 +773,9 @@ VIEWS.ideas = async (mkt, main) => {
 
 VIEWS.screen = async (arg, main) => {
   const U = await universe();
-  const [am, as] = (arg || '').split('|');
-  const F = Object.assign({ m: 'ALL', st: 'CP', q: '', sec: 'ALL', sort: 'valusd', dir: -1 }, store.get('scr', {}), am ? { m: am, sec: as || 'ALL' } : {});
+  const [am, as, ast, ai, aso, ax] = (arg || '').split('|');  // deep link from the dashboards: market|sector|status|industry|sort:dir|exchange suffixes
+  const F = Object.assign({ m: 'ALL', st: 'CP', q: '', sec: 'ALL', sort: 'valusd', dir: -1 }, store.get('scr', {}), { ind: '', sfx: '' },
+    am ? { m: am, sec: as || 'ALL', st: ast || 'CP', ind: ai || '', sfx: ax || '', q: '' } : {}, aso ? { sort: aso.split(':')[0], dir: +aso.split(':')[1] || -1 } : {});
   const secs = [...new Set(U.map(r => r.sec).filter(Boolean))].sort();
   const cols = [['s', 'Ticker'], ['n', 'Name'], ['m', 'Mkt'], ['st', 'Status'], ['px', 'Last'], ['r1', '1D'], ['r21', '1M'], ['r63', '3M'], ['r252', '1Y'], ['rsi', 'RSI'],
     ['score', 'Trend'], ['fc21', '↑1M'], ['pe', 'P/E'], ['roe', 'ROE'], ['dy', 'Div yld'], ['dm', 'Debt/MC'], ['cm', 'Cash/MC'], ['mc', 'Mkt cap'], ['valusd', '$/day']];
@@ -680,15 +783,16 @@ VIEWS.screen = async (arg, main) => {
     <select class="f" id="fm"><option value="ALL">All markets</option>${Object.entries(MKT).map(([k, n]) => `<option value="${k}">${n}</option>`).join('')}</select>
     <select class="f" id="fst"><option value="CP">Compliant (C+P)</option><option value="C">Certified only</option><option value="P">Passes screen only</option><option value="R">Needs review</option><option value="F">Non-compliant</option><option value="ALL">Everything</option></select>
     <select class="f" id="fsec"><option value="ALL">All sectors</option>${secs.map(s => `<option>${esc(s)}</option>`).join('')}</select>
-    <input class="f sp" id="fq" placeholder="Filter by ticker or name" value="${esc(F.q)}"><span class="note" id="fn"></span></div>
+    <input class="f sp" id="fq" placeholder="Filter by ticker or name" value="${esc(F.q)}"><span class="note" id="fn"></span>
+    ${F.ind ? `<a class="chip on" href="#screen" title="Clear the industry filter">Industry: ${esc(F.ind)} ✕</a>` : ''}${F.sfx ? `<a class="chip on" href="#screen" title="Clear the exchange filter">Exchanges: ${esc(F.sfx)} ✕</a>` : ''}</div>
     <div class="panel"><div class="tw" style="max-height:calc(100svh - 230px)"><table id="st"><thead><tr>${cols.map(([k, n]) => `<th class="s ${['s', 'n', 'm', 'st'].includes(k) ? 'l' : ''}" data-k="${k}">${n}${F.sort === k ? (F.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}</tr></thead><tbody></tbody></table></div></div>
     <p class="note">Debt/MC and Cash/MC are the AAOIFI-style ratios (both must be under 30%). Malaysian names use the SC list instead. Showing up to 300 rows. Tap a column to sort.</p>`;
   $('#fm').value = F.m; $('#fst').value = F.st; $('#fsec').value = secs.includes(F.sec) ? F.sec : 'ALL';
   const val = (r, k) => k === 'fc21' ? r.fc?.['21']?.up : r[k];
   const draw = () => {
-    store.set('scr', { ...F, q: F.q });
+    store.set('scr', { ...F, ind: '', sfx: '' });
     const q = F.q.toLowerCase();
-    let rows = U.filter(r => (F.m === 'ALL' || r.m === F.m) && (F.st === 'ALL' || F.st.includes(r.st)) && (F.sec === 'ALL' || r.sec === F.sec)
+    let rows = U.filter(r => (F.m === 'ALL' || r.m === F.m) && (F.st === 'ALL' || F.st.includes(r.st)) && (F.sec === 'ALL' || r.sec === F.sec) && (!F.ind || r.ind === F.ind) && (!F.sfx || F.sfx.split(',').includes(r.s.split('.').pop()))
       && (!q || r.s.toLowerCase().includes(q) || (r.n || '').toLowerCase().includes(q)));
     rows.sort((a, b) => { const x = val(a, F.sort), y = val(b, F.sort); return x == null ? 1 : y == null ? -1 : (x > y ? 1 : x < y ? -1 : 0) * F.dir; });
     $('#fn').textContent = `${rows.length} names`;

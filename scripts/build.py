@@ -114,7 +114,9 @@ MACRO = {
     'Indices': [('^GSPC', 'S&P 500'), ('^IXIC', 'Nasdaq Composite'), ('^DJI', 'Dow Jones'), ('^RUT', 'Russell 2000'),
                 ('^KLSE', 'FBM KLCI'), ('^STI', 'Straits Times Index'), ('^N225', 'Nikkei 225'), ('^HSI', 'Hang Seng'),
                 ('000001.SS', 'Shanghai Composite'), ('^KS11', 'KOSPI'), ('^TWII', 'Taiwan Weighted'), ('^BSESN', 'BSE Sensex'),
-                ('^JKII', 'Jakarta Islamic Index'), ('^FTSE', 'FTSE 100'), ('^GDAXI', 'DAX')],
+                ('^JKII', 'Jakarta Islamic Index'), ('^FTSE', 'FTSE 100'), ('^GDAXI', 'DAX'), ('^NDX', 'Nasdaq 100'),
+                ('^SOX', 'Philadelphia Semiconductor'), ('^HSCE', 'Hang Seng China Enterprises'), ('399001.SZ', 'Shenzhen Component'),
+                ('^AXJO', 'S&P/ASX 200'), ('^GSPTSE', 'S&P/TSX Composite'), ('^STOXX50E', 'Euro Stoxx 50'), ('^FCHI', 'CAC 40'), ('^JKSE', 'Jakarta Composite')],
     'Shariah ETFs': [('SPUS', 'SP Funds S&P 500 Shariah', C), ('HLAL', 'Wahed FTSE USA Shariah', C), ('UMMA', 'Wahed Dow Jones Islamic World', C),
                      ('SPWO', 'SP Funds S&P World ex-US Shariah', C), ('SPTE', 'SP Funds S&P Global Technology Shariah', C), ('SPRE', 'SP Funds Global REIT Shariah', C),
                      ('SPSK', 'SP Funds Dow Jones Global Sukuk', C), ('ISDU.L', 'iShares MSCI USA Islamic (LSE)', {**C, 'cur': 'USD'}),
@@ -1106,7 +1108,7 @@ def quotes(syms):
             if len(f) < 2: continue
             last, prev = f.iloc[-1], f.iloc[-2]
             out[s] = {'p': float(last['Close']), 'c': float(last['Close'] / prev['Close'] - 1), 'h': float(last['High']), 'l': float(last['Low']),
-                      'd': f.index[-1].date().isoformat()}
+                      'v': float(last['Volume'] or 0), 'd': f.index[-1].date().isoformat()}
     return out
 
 
@@ -1138,6 +1140,7 @@ def live_main(profs):
     summary = get('summary.bin', {}) or {}
     syms = [x['s'] for g in (summary.get('macro') or {}).values() for x in g]
     syms += list(family_symbols(profs))
+    syms += [r['s'] for r in get('universe.bin', []) or []]  # the whole universe, so the region dashboards' movers are live
     for k in ('ideas', 'movers'):
         syms += [r['s'] for v in (summary.get(k) or {}).values() for r in v]
     q = quotes(syms)

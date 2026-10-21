@@ -20,7 +20,7 @@ jobs:
       - name: Restore branches
         run: |
           mkdir -p out datadir liveout
-          git fetch --depth 1 origin market && git archive origin/market meta.json summary.bin | tar -x -C out
+          git fetch --depth 1 origin market && git archive origin/market meta.json summary.bin universe.bin | tar -x -C out
           git fetch --depth 1 origin data && git archive origin/data | tar -x -C datadir || true
           git fetch --depth 1 origin live && git archive origin/live | tar -x -C liveout || true
       - run: python scripts/build.py live

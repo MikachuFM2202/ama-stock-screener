@@ -240,3 +240,32 @@ dl.gl dt { font: 600 13px var(--mono); color: var(--amber2); }
 
 /* short screens (phone in landscape): only the header stays pinned */
 @media (max-height: 500px) and (min-width: 761px) { .tabs, .ticker { position: static; } }
+
+/* region dashboards */
+.dreg { margin-bottom: 12px; }
+.dreg .sep { width: 1px; background: var(--line); margin: 0 4px; }
+.dash { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
+.dmain { min-width: 0; }
+.icards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); margin-bottom: 12px; }
+.icard { position: relative; display: grid; gap: 2px; text-align: left; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); color: var(--text); font: 13px var(--mono); cursor: pointer; min-width: 0; }
+.icard.up { background: linear-gradient(180deg, #0d1f14, var(--panel)); } .icard.down { background: linear-gradient(180deg, #210d0d, var(--panel)); }
+.icard.on { border-color: var(--amber); }
+.icard b { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.icard .big, .dside .big { font-size: 26px; font-weight: 600; }
+.icard i { display: block; height: 40px; margin-top: 4px; } .icard i .spark { height: 40px; }
+.dgrid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(0, 1.25fr); grid-template-areas: "a b h" "c d h"; align-items: start; }
+.dgrid > :nth-child(1) { grid-area: a; } .dgrid > :nth-child(2) { grid-area: b; } .dgrid > .dheat { grid-area: h; } .dgrid > :nth-child(4) { grid-area: c; } .dgrid > :nth-child(5) { grid-area: d; }
+table.dl td.nm { max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.heat { position: relative; margin: 8px; }
+.tile { position: absolute; box-sizing: border-box; border: 1px solid #000; padding: 4px; overflow: hidden; color: #fff; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; font: 11px var(--mono); line-height: 1.25; }
+.tile:hover { outline: 2px solid var(--amber); z-index: 1; text-decoration: none; }
+.tile b { font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile.xs b, .tile.xs span { font-size: 9px; }
+.seg { display: inline-flex; border: 1px solid var(--line); } .seg button { background: none; border: 0; color: var(--muted); font: 11px var(--mono); padding: 3px 8px; cursor: pointer; } .seg button.on { background: #333; color: var(--text); }
+.dside { position: sticky; top: calc(var(--top-h, 52px) + var(--tabs-h, 36px) + 40px); }
+.dside .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 10px 0; font: 12px var(--mono); }
+.dside .kv div { display: flex; justify-content: space-between; gap: 6px; } .dside .kv small { color: var(--muted); }
+.dch .spark { height: 140px; } .dch .row { justify-content: space-between; }
+@media (max-width: 1500px) { .dgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "a b" "h h" "c d"; } }
+@media (max-width: 1100px) { .dash { grid-template-columns: 1fr; } .dside { position: static; } }
+@media (max-width: 760px) { .dgrid { grid-template-columns: 1fr; grid-template-areas: "a" "b" "h" "c" "d"; } table.dl td.nm { max-width: 110px; } .dreg { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; } .dreg .chip { flex: 0 0 auto; } }
