@@ -563,6 +563,7 @@ def write_report(kind, summary, uni_rows, wl):
                'and swing ideas, with levels 5) Watchlist notes 6) Three headlines worth reading in full. About 600-900 words.')
         model, tokens = 'openai/gpt-4.1-mini', 2500
     md = llm(SYSTEM, ask + '\n\nDATA (JSON):\n' + ctx, model, tokens)
+    print('llm reply', model, len(md or ''), repr((md or '')[:300]), 'ctx chars', len(ctx), flush=True)
     if md and len(md) < 300: md = None  # a stub or refusal, not a report
     by = os.environ.get('OLLAMA_MODEL') or model if md else 'template'
     bad = unverified(md, ctx) if md else []
