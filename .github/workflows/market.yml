@@ -1,0 +1,61 @@
+# Builds the encrypted market snapshot, writes the AI reports and sends push notifications.
+# The snapshot goes to the orphan `market` branch, force-pushed each run so encrypted blobs don't pile up in history.
+name: market
+on:
+  schedule:
+    - cron: '30 22 * * 0-5'  # 06:30 SGT Mon-Sat: after the US close, daily brief
+    - cron: '15 10 * * 1-5'  # 18:15 SGT Mon-Fri: after the Asia close
+    - cron: '0 9 * * 0'      # 17:00 SGT Sunday: universe + Shariah re-screen + weekly report
+  workflow_dispatch:
+    inputs:
+      mode: { type: choice, options: [evening, daily, weekly], default: evening }
+  repository_dispatch: { types: [test-push] }
+permissions: { contents: write, models: read }
+concurrency: { group: market, cancel-in-progress: false }
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12', cache: pip, cache-dependency-path: scripts/requirements.txt }
+      - run: pip install -r scripts/requirements.txt
+      - name: Restore market + data branches
+        run: |
+          mkdir -p out
+          git fetch --depth 1 origin market && git archive origin/market | tar -x -C out || echo "no market branch yet"
+          git fetch --depth 1 origin data && git show origin/data:state.bin > state.bin || rm -f state.bin
+      - name: Pick mode
+        id: m
+        run: |
+          case "${{ github.event_name }}|${{ github.event.schedule }}" in
+            workflow_dispatch*) echo "mode=${{ inputs.mode }}" ;;
+            repository_dispatch*) echo "mode=testpush" ;;
+            *'0 9 * * 0') echo "mode=weekly" ;;
+            *'15 10 * * 1-5') echo "mode=evening" ;;
+            *) echo "mode=daily" ;;
+          esac >> "$GITHUB_OUTPUT"
+      - run: python scripts/build.py ${{ steps.m.outputs.mode }}
+        env:
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+          OUT: out
+          STATE: state.bin
+          PUSH_OUT: push.json
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish market branch
+        if: steps.m.outputs.mode != 'testpush'
+        working-directory: out
+        run: |
+          rm -rf cache/yf
+          git init -q -b market
+          git add -A
+          git -c user.name=market-bot -c user.email=market-bot@users.noreply.github.com commit -qm "market: ${{ steps.m.outputs.mode }} $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" market
+        env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+      - name: Push notifications
+        if: hashFiles('push.json') != ''
+        run: |
+          npm i --no-save --no-audit --no-fund --prefix scripts web-push@3.6.7
+          node scripts/push.mjs push.json
+        env: { VAPID_PRIVATE: '${{ secrets.VAPID_PRIVATE_KEY }}' }

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Halal Terminal</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Halal Terminal">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js" integrity="sha384-stKllnUqA9AD0gsKCuUtf5XlqAW7PwIgDagoNsTWkjkBmJ/GZ/uHTgEBxdLV2VSK" crossorigin="anonymous" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js" integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous" defer></script>
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form class="login-box" autocomplete="on">
+    <div class="brand"><span class="logo">HT</span> HALAL TERMINAL</div>
+    <p class="muted">Private. Enter the password to unlock the encrypted market data.</p>
+    <input type="text" name="username" value="owner" autocomplete="username" hidden>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
+    <label class="check"><input id="remember" type="checkbox" checked> Remember on this device</label>
+    <button type="submit">UNLOCK &lt;GO&gt;</button>
+    <p id="loginMsg" class="err" role="alert"></p>
+  </form>
+</div>
+<div id="app" hidden>
+  <header class="top">
+    <a class="brand" href="#mkt"><span class="logo">HT</span><span class="brand-t">HALAL TERMINAL</span></a>
+    <form id="cmd" class="cmd" autocomplete="off">
+      <input id="cmdIn" list="cmdList" placeholder="Ticker or name, e.g. AAPL, 5347, D05, Press Metal" aria-label="Go to ticker">
+      <datalist id="cmdList"></datalist>
+      <button type="submit">GO</button>
+    </form>
+    <div class="clock" id="clock"></div>
+  </header>
+  <nav class="tabs" id="tabs"></nav>
+  <main id="main" tabindex="-1"></main>
+  <footer class="foot" id="foot"></footer>
+</div>
+</body>
+</html>
