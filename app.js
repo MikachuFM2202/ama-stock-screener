@@ -1128,7 +1128,7 @@ VIEWS.fx = async (_, main) => {
   const ageMin = LIVE?.at ? (Date.now() - Date.parse(LIVE.at)) / 60000 : Infinity;
   main.innerHTML = `<div class="grid wide">
     ${panel('Every currency on the site, in ringgit', `<div class="tw"><table><thead><tr><th class="l">Currency</th><th class="l">Name</th><th>1 unit = RM (Yahoo)</th><th>1 unit = RM (Coinbase)</th><th title="Gap between the two sources">Check</th><th>1D</th><th>RM 100 =</th><th>Stocks priced in it</th></tr></thead><tbody>
-      ${list.map(c => { const a = rm(A, c), b = rm(X, c), d = a && b ? b / a - 1 : null, ch = chg[c] != null && chg.MYR != null ? (1 + chg.MYR) / (1 + chg[c]) - 1 : null;
+      ${list.map(c => { const a = rm(A, c), b = rm(X, c), d = a && b ? b / a - 1 : null, cc = c === 'USD' ? 0 : chg[c], ch = cc != null && chg.MYR != null ? (1 + chg.MYR) / (1 + cc) - 1 : null;  // rates are per USD, so USD itself never changes
         return `<tr><td class="l"><b>${esc(CUR_SYM[c] || '')}</b> ${esc(c)}</td><td class="l nm">${esc(curName(c))}</td><td>${a ? 'RM ' + a.toFixed(a < 0.01 ? 6 : 4) : '–'}</td><td>${b ? 'RM ' + b.toFixed(b < 0.01 ? 6 : 4) : '–'}</td>
           <td class="${d == null ? 'flat' : Math.abs(d) > .005 ? 'down' : 'up'}">${d == null ? '–' : Math.abs(d) > .005 ? `⚠ ${(d * 100).toFixed(2)}%` : `✓ ${(d * 100).toFixed(2)}%`}</td><td>${pct(ch)}</td>
           <td>${a ? `${esc(CUR_SYM[c] || '')} ${(100 / a).toLocaleString('en-US', { maximumFractionDigits: 100 / a > 1000 ? 0 : 2 })}` : '–'}</td><td>${(used[c] || 0).toLocaleString()}</td></tr>`; }).join('')}
