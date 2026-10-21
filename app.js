@@ -115,7 +115,10 @@ const now = () => new Date().toISOString();
 const blank = () => ({ v: 2, at: 0, wl: [], notes: {}, journal: [], later: [], quick: [], subs: [], prefs: structuredClone(DEF_PREFS), paper: PT.newAccount() });
 let FAMILY = store.get('family', { list: [], at: 0 });
 let ME = null, ST = blank();
-const people = () => FAMILY.list.filter(p => !p.del).map(p => /^#[0-9a-f]{6}$/i.test(p.color || '') ? p : { ...p, color: COLORS[0] });
+// Built-in Guest: not in profiles.bin, its watchlist/paper trades stay on the device and never sync.
+const GUEST = { id: 'guest', name: 'Guest', color: '#888888', pin: null };
+const isGuest = () => ME?.id === GUEST.id;
+const people = () => [...FAMILY.list.filter(p => !p.del && p.id !== GUEST.id).map(p => /^#[0-9a-f]{6}$/i.test(p.color || '') ? p : { ...p, color: COLORS[0] }), GUEST];
 const P = () => ({ ...DEF_PREFS, ...ST.prefs, notify: { ...DEF_PREFS.notify, ...(ST.prefs?.notify || {}) }, news: { ...DEF_PREFS.news, ...(ST.prefs?.news || {}) } });
 const myNews = list => { const mine = new Set(P().news.sources); return (list || []).filter(n => !n.src || mine.has(n.src)); };
 
@@ -160,6 +163,7 @@ let saveT = null, syncMsg = '';
 function saveState() {
   ST.at = Date.now(); store.set(`st:${ME.id}`, ST);
   clearTimeout(saveT);
+  if (isGuest()) { syncMsg = 'Guest: saved on this device only.'; return; }
   if (!TOKEN) { syncMsg = 'Saved on this device only. Connect GitHub in Settings → Family to sync.'; return; }
   const id = ME.id;
   saveT = setTimeout(async () => {
@@ -195,12 +199,12 @@ function pickProfile(msg = '') {
   el.innerHTML = `<div class="who-box"><div class="brand"><span class="logo">AMA</span> WHO'S USING THE SCREENER?</div>
     ${msg ? `<p class="err">${esc(msg)}</p>` : ''}
     <div class="people">${list.map(p => `<button class="person" data-id="${esc(p.id)}"><span class="avatar lg" style="background:${esc(p.color)}">${esc(p.name.slice(0, 1).toUpperCase())}</span>${esc(p.name)}${p.pin ? ' 🔒' : ''}</button>`).join('')}</div>
-    <form id="addP" class="panel pb" style="display:grid;gap:10px"><b class="amber">${list.length ? 'Add a family member' : 'Create the first profile'}</b>
+    ${list.length > 1 ? '' : `<form id="addP" class="panel pb" style="display:grid;gap:10px"><b class="amber">Create the owner profile</b>
       <input class="f" id="pName" maxlength="20" placeholder="Name" required>
       <div class="swatches">${COLORS.map((c, i) => `<input type="radio" name="pc" id="pc${i}" value="${c}" ${i === list.length % COLORS.length ? 'checked' : ''}><label for="pc${i}" style="background:${c}" title="${c}"></label>`).join('')}</div>
       <input class="f" id="pPin" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" placeholder="Optional PIN (4–8 digits)" autocomplete="off">
       <button class="btn">CREATE PROFILE</button>
-      <p class="note">Everyone in the family shares the family password; profiles keep watchlists, notes, paper trading and notifications separate. A PIN stops casual switching. It is a lock on the door, not separate encryption.${TOKEN ? '' : ' GitHub sync is not connected yet, so new profiles stay on this device until it is (Settings → Family).'}</p></form>
+      <p class="note">Only the owner and Guest use this screener. Guest keeps its watchlist and paper trades on its own device. A PIN on the owner profile stops guests from switching to it.${TOKEN ? '' : ' GitHub sync is not connected yet, so the profile stays on this device until it is (Settings → Family).'}</p></form>`}
     ${ME ? '<button class="btn ghost" id="pBack">BACK</button>' : ''}</div>`;
   $$('.person', el).forEach(b => b.onclick = async () => {
     const p = people().find(x => x.id === b.dataset.id);
@@ -212,7 +216,7 @@ function pickProfile(msg = '') {
     el.hidden = true; await loadMe(p.id); route(); popNews();
   });
   $('#pBack')?.addEventListener('click', () => { el.hidden = true; });
-  $('#addP').onsubmit = async e => {
+  if ($('#addP')) $('#addP').onsubmit = async e => {
     e.preventDefault();
     const name = $('#pName').value.trim(), pin = $('#pPin').value.trim();
     if (!name) return;
@@ -1207,7 +1211,7 @@ VIEWS.settings = async (_, main) => {
   const ios = /iPhone|iPad/.test(navigator.userAgent), standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const N = [['daily', 'Daily brief ready (~06:30 SGT)'], ['weekly', 'Weekly report ready (Sun 17:00 SGT)'], ['alerts', 'Watchlist price alerts'], ['moves', 'Big moves in my watchlist'], ['orders', 'Paper orders triggered'], ['breaking', 'Breaking market headlines (busy!)']];
   main.innerHTML = `<div class="grid">
-    ${panel(`Profile · ${esc(ME.name)}`, `<form class="pb" id="pf" style="display:grid;gap:10px"><div class="form"><label>Name<input class="f" id="pfN" maxlength="20" value="${esc(ME.name)}"></label>
+    ${isGuest() ? panel('Profile · Guest', '<div class="pb"><p>Guest mode: your watchlist, notes and paper trades stay on this device only. Notifications are for the owner profile.</p><button type="button" class="btn ghost" id="pfSwitch">SWITCH PROFILE</button></div>') : panel(`Profile · ${esc(ME.name)}`, `<form class="pb" id="pf" style="display:grid;gap:10px"><div class="form"><label>Name<input class="f" id="pfN" maxlength="20" value="${esc(ME.name)}"></label>
       <label>New PIN (blank = keep, “none” = remove)<input class="f" id="pfPin" inputmode="numeric" maxlength="8" autocomplete="off"></label></div>
       <div class="swatches">${COLORS.map((c, i) => `<input type="radio" name="pfc" id="pfc${i}" value="${c}" ${c === ME.color ? 'checked' : ''}><label for="pfc${i}" style="background:${c}"></label>`).join('')}</div>
       <div class="row"><button class="btn">SAVE PROFILE</button><button type="button" class="btn ghost" id="pfSwitch">SWITCH PROFILE</button><button type="button" class="btn ghost" id="pfDel">DELETE PROFILE…</button></div><p class="err" id="pfMsg"></p></form>`)}
@@ -1224,7 +1228,7 @@ VIEWS.settings = async (_, main) => {
       <label>Base currency<select class="f" name="base">${['SGD', 'USD', 'MYR'].map(c => `<option ${ST.paper.base === c ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
       <label>Fee per trade %<input class="f" name="fee" inputmode="decimal" value="${ST.paper.fee}"></label></div>
       <p class="note">Changing these starts a fresh account (old trades stay in history but no longer count).</p><button class="btn ghost" id="paReset">RESET PAPER ACCOUNT…</button></form>`)}
-    ${panel('Notifications on this device', `<div class="pb">${!pushOk() ? `<p>${ios && !standalone ? 'On iPhone: tap Share → <b>Add to Home Screen</b>, open the app from the home screen, then come back here.' : 'This browser does not support push notifications.'}</p>`
+    ${panel('Notifications on this device', `<div class="pb">${isGuest() ? '<p>Notifications are for the owner profile only.</p>' : !pushOk() ? `<p>${ios && !standalone ? 'On iPhone: tap Share → <b>Add to Home Screen</b>, open the app from the home screen, then come back here.' : 'This browser does not support push notifications.'}</p>`
       : `<div class="row"><button class="btn" id="pushOn" ${sub ? 'hidden' : ''}>ENABLE FOR ${esc(ME.name.toUpperCase())}</button><button class="btn ghost" id="pushTest" ${sub ? '' : 'hidden'}>SEND TEST</button><button class="btn ghost" id="pushOff" ${sub ? '' : 'hidden'}>TURN OFF</button></div>
       <p class="note" id="pmsg">${sub ? (ST.subs.some(s => s.endpoint === sub.endpoint && !s.del) ? `On for ${esc(ME.name)} on this device.` : 'This device is subscribed for another profile. Tap Enable to move it here.') : ''}${TOKEN ? '' : ' Needs GitHub sync (Family below) first.'}</p>`}
       <form id="nf">${N.map(([k, n]) => `<label class="toggle"><input type="checkbox" name="${k}" ${pr.notify[k] ? 'checked' : ''}> ${n}</label>`).join('')}</form>
@@ -1246,7 +1250,7 @@ VIEWS.settings = async (_, main) => {
     ${panel('moomoo OpenAPI', `<div class="pb md">${LEARN.find(x => x.id === 'moomoo').html}</div>`)}
   </div>`;
   const msg = (id, t) => { const el = $(`#${id}`); if (el) el.textContent = t; };
-  $('#pf').onsubmit = async e => {
+  if ($('#pf')) $('#pf').onsubmit = async e => {
     e.preventDefault();
     const p = FAMILY.list.find(x => x.id === ME.id), pin = $('#pfPin').value.trim();
     if (pin && pin !== 'none' && !/^\d{4,8}$/.test(pin)) return msg('pfMsg', 'PIN must be 4–8 digits, or “none”.');
@@ -1258,8 +1262,8 @@ VIEWS.settings = async (_, main) => {
   };
   $('#pfSwitch').onclick = () => pickProfile();
   let delArm = false;
-  $('#pfDel').onclick = async () => {
-    if (people().length < 2) return msg('pfMsg', 'This is the only profile.');
+  if ($('#pfDel')) $('#pfDel').onclick = async () => {
+    if (people().length < 3) return msg('pfMsg', 'This is the only profile.');
     if (!delArm) { delArm = true; $('#pfDel').textContent = 'TAP AGAIN TO DELETE'; return; }
     Object.assign(FAMILY.list.find(x => x.id === ME.id), { del: true, u: now() });
     await saveFamily().catch(() => {}); store.del('me'); ME = null; pickProfile('Profile deleted.');

@@ -50,7 +50,7 @@ export const PATTERNS = [
 const box = (title, body) => `<blockquote><b>${title}</b><br>${body}</blockquote>`;
 export const LEARN = [
   { id: 'start', t: 'Start here: using AMA Stock Screener', lvl: 'Everyone', html: `
-<p>AMA Stock Screener tracks about 1,650 stocks across Malaysia, Singapore, the US and global markets, plus indices, commodities, currencies and rates. It screens every stock for Shariah compliance and ranks ideas. Each family member has their own <b>profile</b> (tap the round avatar, top right) with their own watchlist, notes, paper-trading account, watch-later list and notifications. Everything is encrypted with the family password before it is published.</p>
+<p>AMA Stock Screener tracks about 1,650 stocks across Malaysia, Singapore, the US and global markets, plus indices, commodities, currencies and rates. It screens every stock for Shariah compliance and ranks ideas. The owner has a <b>profile</b> (tap the round avatar, top right) with a synced watchlist, notes, paper-trading account, watch-later list and notifications. <b>Guest</b> gets the same tools, saved on its own device only. Everything is encrypted with the family password before it is published.</p>
 <p><b>Freshness:</b> quotes and breaking news refresh about every 10 minutes (every minute with the optional Cloudflare Worker). The full analysis runs after each market close. Tap <b>⟳</b> to fetch fresh prices now.</p>
 <h2>Tabs</h2>
 <ul>
