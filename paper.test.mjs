@@ -53,4 +53,8 @@ assert.equal(holdings(bad).cash, 1000);
 // indices / futures / FX are not tradable; sells need an FX rate too
 assert.match(check(p, { s: '^GSPC', side: 'buy', q: 1, type: 'market' }, { px: 1, cur: 'USD' }, fx), /not tradable/);
 assert.match(check(p, { s: 'CL=F', side: 'buy', q: 1, type: 'market' }, { px: 1, cur: 'USD' }, fx), /not tradable/);
+// fractional US shares are fine, fractional Bursa shares are not
+assert.equal(check(newAccount(5000), { s: 'AAPL', side: 'buy', q: 1.5, type: 'market' }, { px: 100, cur: 'USD' }, fx), '');
+assert.match(check(newAccount(5000), { s: 'AAPL', side: 'buy', q: 1.555, type: 'market' }, { px: 100, cur: 'USD' }, fx), /2 decimal/);
+assert.match(check(newAccount(5000), { s: '5347.KL', side: 'buy', q: 100.5, type: 'market' }, { px: 1, cur: 'MYR' }, fx), /whole number/);
 console.log('ok');

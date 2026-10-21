@@ -64,8 +64,10 @@ export function value(p, price, fx) {
 export function check(p, o, quote, fx, opts = {}) {
   if (!o.s) return 'Pick a stock.';
   if (/[\^=]/.test(o.s)) return `${o.s} is an index, future or currency: not tradable here. Try a stock or a Shariah ETF.`;
-  if (!(o.q > 0) || !Number.isInteger(o.q)) return 'Quantity must be a whole number of shares.';
-  if (o.q % LOT(o.s)) return `${o.s} trades in board lots of ${LOT(o.s)} shares.`;
+  const frac = !o.s.includes('.');  // US listings: moomoo allows fractional shares (to 0.01)
+  if (!(o.q > 0) || (frac ? Math.abs(o.q * 100 - Math.round(o.q * 100)) > 1e-6 : !Number.isInteger(o.q)))
+    return frac ? 'Quantity: up to 2 decimal places for US stocks.' : 'Quantity must be a whole number of shares.';
+  if (LOT(o.s) > 1 && o.q % LOT(o.s)) return `${o.s} trades in board lots of ${LOT(o.s)} shares.`;
   if (opts.shariahOnly && o.side === 'buy' && opts.status === 'F') return 'Shariah-only mode: this stock is not Shariah-compliant (status F).';
   if (o.type !== 'market' && !(o.px > 0)) return 'Enter a price for limit/stop orders.';
   const h = holdings(p);

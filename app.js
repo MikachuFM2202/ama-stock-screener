@@ -650,7 +650,8 @@ function drawChart(b, r, weekly = false) {
   const chart = LW.createChart(el, {
     autoSize: true, layout: { background: { color: '#000' }, textColor: '#8c8c8c', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11 },
     grid: { vertLines: { color: '#121212' }, horzLines: { color: '#121212' } }, crosshair: { mode: 0 },
-    rightPriceScale: { borderColor: '#2a2a2a', scaleMargins: { top: .05, bottom: .32 } }, timeScale: { borderColor: '#2a2a2a', rightOffset: 4 },
+    // Weekly full-history view on a log scale: equal % moves look equal, and decades of small prices aren't a flat line.
+    rightPriceScale: { borderColor: '#2a2a2a', scaleMargins: { top: .05, bottom: .32 }, mode: weekly ? 1 : 0 }, timeScale: { borderColor: '#2a2a2a', rightOffset: 4 },
     localization: { priceFormatter: px },
   });
   chartCleanup = () => { chart.remove(); chartApi = null; };
@@ -1025,7 +1026,7 @@ VIEWS.paper = async (arg, main) => {
       <div class="form"><label>Stock<input class="f" id="tkS" list="cmdList" value="${esc(sym || '')}" placeholder="AAPL, 5347.KL…" autocapitalize="characters" required></label>
       <label>Side<span class="seg"><button type="button" data-side="buy" class="on buy">BUY</button><button type="button" data-side="sell">SELL</button></span></label>
       <label>Type<span class="seg">${['market', 'limit', 'stop'].map((t, i) => `<button type="button" data-type="${t}" class="${i ? '' : 'on t'}">${t.toUpperCase()}</button>`).join('')}</span></label>
-      <label>Quantity (shares)<input class="f" id="tkQ" inputmode="numeric" placeholder="e.g. 100" value="${+preQty > 0 ? +preQty : ''}"></label>
+      <label>Quantity (shares)<input class="f" id="tkQ" inputmode="decimal" placeholder="e.g. 100 (US: fractions OK)" value="${+preQty > 0 ? +preQty : ''}"></label>
       <label id="tkPxL" hidden>Price<input class="f" id="tkPx" inputmode="decimal"></label></div>
       <p id="tkInfo" class="mono"></p><p id="tkErr" class="err"></p><button class="btn" id="tkGo">PLACE ORDER</button></form>`)}
     ${panel('Positions', `<div class="tw"><table><thead><tr><th>Ticker</th><th>Qty</th><th>Avg cost</th><th>Last</th><th>Value (${esc(B)})</th><th>P/L</th><th>P/L %</th><th class="l">Status</th><th></th></tr></thead><tbody>
