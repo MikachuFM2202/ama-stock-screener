@@ -108,18 +108,34 @@ def http(url, tries=3, **kw):
 
 # ---------------------------------------------------------------- reference lists
 
+# Optional third item: fields copied onto the row (st = Shariah status for paper trading, cur = trading currency).
+C, F, R = {'st': 'C'}, {'st': 'F'}, {'st': 'R'}
 MACRO = {
     'Indices': [('^GSPC', 'S&P 500'), ('^IXIC', 'Nasdaq Composite'), ('^DJI', 'Dow Jones'), ('^RUT', 'Russell 2000'),
                 ('^KLSE', 'FBM KLCI'), ('^STI', 'Straits Times Index'), ('^N225', 'Nikkei 225'), ('^HSI', 'Hang Seng'),
                 ('000001.SS', 'Shanghai Composite'), ('^KS11', 'KOSPI'), ('^TWII', 'Taiwan Weighted'), ('^BSESN', 'BSE Sensex'),
                 ('^JKII', 'Jakarta Islamic Index'), ('^FTSE', 'FTSE 100'), ('^GDAXI', 'DAX')],
-    'Shariah ETFs': [('SPUS', 'SP Funds S&P 500 Shariah'), ('HLAL', 'Wahed FTSE USA Shariah'), ('UMMA', 'Wahed Dow Jones Islamic World'),
-                     ('SPWO', 'SP Funds S&P World ex-US Shariah'), ('SPTE', 'SP Funds S&P Global Technology Shariah'), ('SPRE', 'SP Funds Global REIT Shariah'),
-                     ('SPSK', 'SP Funds Dow Jones Global Sukuk'), ('ISDU.L', 'iShares MSCI USA Islamic (LSE)'), ('ISWD.L', 'iShares MSCI World Islamic (LSE)')],
-    'Commodities': [('GC=F', 'Gold'), ('SI=F', 'Silver'), ('PL=F', 'Platinum'), ('HG=F', 'Copper'), ('CL=F', 'WTI crude oil'),
-                    ('BZ=F', 'Brent crude oil'), ('NG=F', 'Natural gas'), ('ZW=F', 'Wheat'), ('ZC=F', 'Corn'), ('ZS=F', 'Soybeans')],
-    'FX & rates': [('SGD=X', 'USD/SGD'), ('MYR=X', 'USD/MYR'), ('SGDMYR=X', 'SGD/MYR'), ('DX-Y.NYB', 'US Dollar Index'),
-                   ('JPY=X', 'USD/JPY'), ('CNY=X', 'USD/CNY'), ('^TNX', 'US 10-year yield'), ('^IRX', 'US 13-week T-bill'), ('^VIX', 'VIX (fear gauge)')],
+    'Shariah ETFs': [('SPUS', 'SP Funds S&P 500 Shariah', C), ('HLAL', 'Wahed FTSE USA Shariah', C), ('UMMA', 'Wahed Dow Jones Islamic World', C),
+                     ('SPWO', 'SP Funds S&P World ex-US Shariah', C), ('SPTE', 'SP Funds S&P Global Technology Shariah', C), ('SPRE', 'SP Funds Global REIT Shariah', C),
+                     ('SPSK', 'SP Funds Dow Jones Global Sukuk', C), ('ISDU.L', 'iShares MSCI USA Islamic (LSE)', {**C, 'cur': 'USD'}),
+                     ('ISWD.L', 'iShares MSCI World Islamic (LSE)', {**C, 'cur': 'USD'}), ('IGDA.L', 'Invesco Dow Jones Islamic Global Developed (LSE)', {**C, 'cur': 'USD'}),
+                     ('0821EA.KL', 'Eq8 DJ Islamic Malaysia Titans 25', C), ('0824EA.KL', 'Eq8 MSCI Malaysia Islamic Dividend', C),
+                     ('0825EA.KL', 'Eq8 MSCI SEA Islamic Dividend', C), ('0827EA.KL', 'Eq8 DJ Islamic US Titans 50', C),
+                     ('0838EA.KL', 'VP-DJ Shariah China A-Shares 100', C), ('0828EA.KL', 'TradePlus Shariah Gold', C)],
+    'Commodities': [('GC=F', 'Gold'), ('SI=F', 'Silver'), ('PL=F', 'Platinum'), ('PA=F', 'Palladium'), ('HG=F', 'Copper'), ('ALI=F', 'Aluminium'),
+                    ('CL=F', 'WTI crude oil'), ('BZ=F', 'Brent crude oil'), ('NG=F', 'Natural gas'), ('RB=F', 'Gasoline'), ('HO=F', 'Heating oil'),
+                    ('ZW=F', 'Wheat'), ('ZC=F', 'Corn'), ('ZS=F', 'Soybeans'), ('KC=F', 'Coffee'), ('SB=F', 'Sugar'), ('CC=F', 'Cocoa'), ('CT=F', 'Cotton')],
+    'Crypto': [('BTC-USD', 'Bitcoin', R), ('ETH-USD', 'Ethereum', R), ('SOL-USD', 'Solana', R), ('XRP-USD', 'XRP', R), ('BNB-USD', 'BNB', R),
+               ('ADA-USD', 'Cardano', R), ('AVAX-USD', 'Avalanche', R), ('LINK-USD', 'Chainlink', R), ('DOT-USD', 'Polkadot', R),
+               ('DOGE-USD', 'Dogecoin (meme coin)', F), ('IBIT', 'iShares Bitcoin Trust ETF', R), ('ETHA', 'iShares Ethereum Trust ETF', R)],
+    'Futures': [('ES=F', 'S&P 500 E-mini'), ('NQ=F', 'Nasdaq 100 E-mini'), ('YM=F', 'Dow E-mini'), ('RTY=F', 'Russell 2000 E-mini'),
+                ('NIY=F', 'Nikkei 225 (yen)'), ('6E=F', 'Euro FX'), ('6J=F', 'Japanese yen'), ('ZT=F', 'US 2-year Treasury note'),
+                ('ZN=F', 'US 10-year Treasury note'), ('ZB=F', 'US 30-year Treasury bond')],
+    'Bonds': [('^IRX', 'US 13-week T-bill yield'), ('^FVX', 'US 5-year yield'), ('^TNX', 'US 10-year yield'), ('^TYX', 'US 30-year yield'),
+              ('SPSK', 'SP Funds Dow Jones Global Sukuk (Shariah)', C), ('SHY', 'iShares 1-3 Year Treasury', F), ('IEF', 'iShares 7-10 Year Treasury', F),
+              ('TLT', 'iShares 20+ Year Treasury', F), ('AGG', 'iShares Core US Aggregate Bond', F), ('HYG', 'iShares High Yield Corporate Bond', F)],
+    'FX & VIX': [('SGD=X', 'USD/SGD'), ('MYR=X', 'USD/MYR'), ('SGDMYR=X', 'SGD/MYR'), ('DX-Y.NYB', 'US Dollar Index'),
+                 ('JPY=X', 'USD/JPY'), ('CNY=X', 'USD/CNY'), ('^VIX', 'VIX (fear gauge)')],
 }
 EXCLUDED_INDUSTRY = re.compile(
     r'bank|insurance|credit services|mortgage|capital markets|financial conglomerates|asset management|'
@@ -811,7 +827,7 @@ def main():
             mk = 'MY' if w['s'].endswith('.KL') else 'SG' if w['s'].endswith('.SI') else 'US' if '.' not in w['s'] else 'GL'
             uni[w['s']] = {'m': mk, 'n': f.get('longName') or w['s'], 'sc': mk == 'MY' and w['s'].split('.')[0] in sc.get('codes', []), 'wl': 1}
 
-    macro_syms = [s for g in MACRO.values() for s, _ in g]
+    macro_syms = list(dict.fromkeys(s for g in MACRO.values() for s, *_ in g))
     curr = ({((fund.get(s) or {}).get('currency') or '').upper() for s in uni} | {'SGD', 'MYR'}) - {'', 'USD'}  # GBp (pence) -> GBP, x100 below
     fx_syms = [f'{c}=X' for c in curr if c.isalpha() and len(c) == 3]
     P = download(list(uni) + macro_syms + fx_syms)
@@ -850,9 +866,9 @@ def main():
     macro = {}
     for g, items in MACRO.items():
         macro[g] = []
-        for s, n in items:
+        for s, n, *o in items:
             x = snap(I, s) if s in have else None
-            if x: macro[g].append({'s': s, 'n': n, **x, 'bias': label(x['score'] or 0), 'fc': forecast(x['px'], x['score'] or 0, x['vol'], cal.get('MACRO', {}))})
+            if x: macro[g].append({'s': s, 'n': n, **(o[0] if o else {}), **x, 'bias': label(x['score'] or 0), 'fc': forecast(x['px'], x['score'] or 0, x['vol'], cal.get('MACRO', {}))})
 
     ideas, movers = {}, {}
     def ok(r): return r['st'] in ('C', 'P') and r.get('valusd') and r['valusd'] > 1e6
@@ -907,7 +923,7 @@ def main():
     # Small-account strategies: compliant, liquid stocks plus the US-listed Shariah ETFs.
     meta = {r['s']: {'m': r['m'], 'st': r['st'], 'cur': r['cur'], 'n': r['n'], 'val': r.get('valusd')} for r in rows
             if r['st'] in ('C', 'P') and (r.get('valusd') or 0) > (3e5 if r['m'] in ('MY', 'SG') else 2e6)}
-    meta.update({s: {'m': 'ETF', 'st': 'C', 'cur': 'USD', 'n': n, 'val': None} for s, n in MACRO['Shariah ETFs'] if not s.endswith('.L') and s in have})
+    meta.update({s: {'m': 'ETF', 'st': 'C', 'cur': 'USD', 'n': n, 'val': None} for s, n, *_ in MACRO['Shariah ETFs'] if '.' not in s and s in have})
     sigs, rets = strategy_scan(P, meta)
     summary['quick'] = {'at': NOW.isoformat(), 'strats': STRATS, 'signals': sigs, 'stats': strategy_stats(rets)}
     print('strategies', len(sigs), 'signals today', {k: sum(len(v) for v in r.values()) for k, r in rets.items()}, 'backtest trades')

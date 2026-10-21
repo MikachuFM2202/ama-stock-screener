@@ -45,8 +45,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .cmd button { background: #1d6b2f; color: #fff; border: 0; padding: 0 14px; font: 700 13px var(--mono); cursor: pointer; }
 .clock { font: 12px var(--mono); color: var(--muted); white-space: nowrap; text-align: right; }
 .clock b { color: var(--amber); font-weight: 600; }
-.tabs { position: sticky; top: var(--top-h, 52px); z-index: 19; display: flex; overflow-x: auto; scrollbar-width: none; background: #0a0a0a; border-bottom: 1px solid var(--line); }
-.tabs::-webkit-scrollbar { display: none; }
+.tabs { position: sticky; top: var(--top-h, 52px); z-index: 19; display: flex; flex-wrap: wrap; background: #0a0a0a; border-bottom: 1px solid var(--line); }
 .tabs a { flex: 0 0 auto; padding: 9px 14px; font: 600 12px var(--mono); color: var(--muted); border-right: 1px solid var(--line); letter-spacing: .05em; }
 .tabs a b { color: var(--amber); margin-right: 6px; font-weight: 600; }
 .tabs a.on { background: var(--amber); color: #000; }

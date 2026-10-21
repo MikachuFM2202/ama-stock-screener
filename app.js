@@ -408,10 +408,12 @@ const TV_MACRO = { '^GSPC': 'SP:SPX', '^IXIC': 'NASDAQ:IXIC', '^DJI': 'DJ:DJI', 
   '^JKII': 'IDX:JII', '^FTSE': 'TVC:UKX', '^GDAXI': 'XETR:DAX', 'GC=F': 'COMEX:GC1!', 'SI=F': 'COMEX:SI1!', 'PL=F': 'NYMEX:PL1!', 'HG=F': 'COMEX:HG1!',
   'CL=F': 'NYMEX:CL1!', 'BZ=F': 'ICEEUR:BRN1!', 'NG=F': 'NYMEX:NG1!', 'ZW=F': 'CBOT:ZW1!', 'ZC=F': 'CBOT:ZC1!', 'ZS=F': 'CBOT:ZS1!',
   'SGD=X': 'FX_IDC:USDSGD', 'MYR=X': 'FX_IDC:USDMYR', 'SGDMYR=X': 'FX_IDC:SGDMYR', 'DX-Y.NYB': 'TVC:DXY', 'JPY=X': 'FX:USDJPY',
-  'CNY=X': 'FX_IDC:USDCNY', '^TNX': 'TVC:US10Y', '^IRX': 'TVC:US03MY', '^VIX': 'TVC:VIX', 'ISWD.L': 'LSE:ISWD', 'ISDU.L': 'LSE:ISDU' };
+  'CNY=X': 'FX_IDC:USDCNY', '^TNX': 'TVC:US10Y', '^IRX': 'TVC:US03MY', '^FVX': 'TVC:US05Y', '^TYX': 'TVC:US30Y', '^VIX': 'TVC:VIX', 'ISWD.L': 'LSE:ISWD', 'ISDU.L': 'LSE:ISDU' };
 const TV_EX = { KL: 'MYX', SI: 'SGX', T: 'TSE', HK: 'HKEX', KS: 'KRX', TW: 'TWSE', AX: 'ASX', L: 'LSE', TO: 'TSX', SW: 'SIX', AS: 'EURONEXT', SS: 'SSE', SZ: 'SZSE', JK: 'IDX', HE: 'OMXHEX', MC: 'BME', MI: 'MIL', CO: 'OMXCOP' };
 function tvSym(s) {
   if (TV_MACRO[s]) return TV_MACRO[s];
+  if (s.endsWith('-USD')) return `CRYPTO:${s.slice(0, -4)}USD`;
+  if (s.endsWith('=F')) return `${s.slice(0, -2)}1!`;
   const [code, ex] = s.split('.');
   if (!ex) return s.replace('-', '.');
   return `${TV_EX[ex] || ex}:${ex === 'HK' ? String(+code) : code}`;
@@ -423,7 +425,8 @@ function mooCode(s) {
 
 // ---------------------------------------------------------------- shell
 // ---------------------------------------------------------------- shell
-const TABS = [['mkt', 'MKT', 'Market'], ['brief', 'BRF', 'Reports'], ['quick', 'SMLL', 'Small account'], ['ideas', 'IDEA', 'Ideas'], ['screen', 'SCRN', 'Screener'],
+const TABS = [['mkt', 'MKT', 'Market'], ['etf', 'ETF', 'ETFs'], ['cmdty', 'CMDY', 'Commodities'], ['crypto', 'CRYP', 'Crypto'], ['fut', 'FUT', 'Futures'], ['bonds', 'BOND', 'Bonds'],
+  ['brief', 'BRF', 'Reports'], ['quick', 'SMLL', 'Small account'], ['ideas', 'IDEA', 'Ideas'], ['screen', 'SCRN', 'Screener'],
   ['wl', 'WL', 'Watchlist'], ['paper', 'PAPR', 'Paper'], ['notes', 'NOTE', 'Notes'], ['news', 'NEWS', 'News'],
   ['media', 'TV', 'Watch'], ['learn', 'EDU', 'Learn'], ['glossary', 'GLOS', 'Terms'], ['settings', 'SET', 'Settings']];
 const BNAV = ['mkt', 'quick', 'wl', 'paper'];
@@ -582,14 +585,27 @@ function sessionsHtml() {
 
 // ---------------------------------------------------------------- views
 const VIEWS = {};
+const macroTbl = rows => `<div class="tw"><table><thead><tr><th>Name</th>${rows.some(r => r.st) ? '<th title="Shariah status">Sh</th>' : ''}<th>Last</th><th>1D</th><th>1W</th><th>1M</th><th>YTD</th><th>RSI</th><th class="l">Trend bias</th>
+    <th title="Probability of being higher in ~1 week">↑1W</th><th title="~1 month">↑1M</th><th title="~3 months">↑3M</th></tr></thead><tbody>${rows.map(r => `
+    <tr class="go" data-go="stock/${encodeURIComponent(r.s)}"><td class="l"><span class="sym">${esc(r.n)}</span></td>${rows.some(r => r.st) ? `<td>${badge(r.st)}</td>` : ''}<td>${px(r.px)}</td><td>${pct(r.r1)}</td><td>${pct(r.r5)}</td>
+    <td>${pct(r.r21)}</td><td>${pct(r.ytd)}</td><td>${r.rsi == null ? '–' : r.rsi.toFixed(0)}</td><td class="l">${biasHtml(r.bias)}</td>
+    <td>${fcCell(r.fc, 5)}</td><td>${fcCell(r.fc, 21)}</td><td>${fcCell(r.fc, 63)}</td></tr>`).join('')}</tbody></table></div>`;
+
+// Asset-class tabs: one macro group each (scripts/build.py MACRO), with the Shariah position for that class.
+const ASSETS = [
+  ['etf', 'Shariah ETFs', 'Shariah ETFs', 'Every fund here tracks a Shariah index screened by its own Shariah board, so status C. US ones trade on moomoo; .KL ones on Bursa (M+ / UOBKH, board lots of 100); .L ones on the London Stock Exchange in USD. TradePlus Shariah Gold is physically backed gold, the simplest halal way to hold gold.'],
+  ['cmdty', 'Commodities', 'Commodities', 'Prices are front-month futures, the global benchmark. Futures themselves are not Shariah-compliant for most scholars (AAOIFI Standard 20: deferred sale of both sides, no possession), so they are not tradable in Paper. To own gold: the Shariah gold ETF (ETF tab) or physical gold with spot, hand-to-hand payment. Malaysia\'s SC Shariah Advisory Council does allow Bursa crude palm oil futures (FCPO).'],
+  ['crypto', 'Crypto', 'Crypto', 'Scholars disagree. Some accept major coins such as Bitcoin and Ethereum as permissible digital assets (bought spot, unleveraged, from your own money); others, including Indonesia\'s MUI (2021), rule crypto as currency haram. Most agree that leverage, margin, interest-bearing "earn" or lending products, and pure-speculation meme coins are not allowed, so Dogecoin is marked F and the rest R (review). Ask your scholar; Paper treats R as tradable.'],
+  ['fut', 'Futures', 'Futures', 'Index, currency and bond futures trade almost round the clock, so they show where markets are heading before Asia or the US opens. Conventional futures are not Shariah-compliant for most scholars (leverage, no possession, interest-bearing margin), so these are for reading direction only and cannot be paper-traded.'],
+  ['bonds', 'Bonds', 'Bonds', 'Conventional bonds pay interest (riba), so they are not permissible: those ETFs are marked F and blocked in Shariah-only Paper. The yields still matter because they set the price of money: rising 10-year yields usually hurt growth stocks and REITs. The Shariah alternative is sukuk (asset-backed certificates): SP Funds Global Sukuk (SPSK).']];
+for (const [id, g, title, note] of ASSETS) VIEWS[id] = async (_, main) => {
+  const rows = D.summary.macro[g] || [];
+  main.innerHTML = `<div class="grid">${panel(`${title} · ${rows.length}`, rows.length ? macroTbl(rows) : '<p class="pb muted">No data yet: this list arrives with the next market update.</p>', '', 'span')}
+    ${panel('Shariah view', `<p class="pb">${esc(note)}</p>`, '', 'span')}</div>`;
+};
 
 VIEWS.mkt = async (_, main) => {
   const S = D.summary;
-  const tbl = rows => `<div class="tw"><table><thead><tr><th>Name</th><th>Last</th><th>1D</th><th>1W</th><th>1M</th><th>YTD</th><th>RSI</th><th class="l">Trend bias</th>
-    <th title="Probability of being higher in ~1 week">↑1W</th><th title="~1 month">↑1M</th><th title="~3 months">↑3M</th></tr></thead><tbody>${rows.map(r => `
-    <tr class="go" data-go="stock/${encodeURIComponent(r.s)}"><td class="l"><span class="sym">${esc(r.n)}</span></td><td>${px(r.px)}</td><td>${pct(r.r1)}</td><td>${pct(r.r5)}</td>
-    <td>${pct(r.r21)}</td><td>${pct(r.ytd)}</td><td>${r.rsi == null ? '–' : r.rsi.toFixed(0)}</td><td class="l">${biasHtml(r.bias)}</td>
-    <td>${fcCell(r.fc, 5)}</td><td>${fcCell(r.fc, 21)}</td><td>${fcCell(r.fc, 63)}</td></tr>`).join('')}</tbody></table></div>`;
   const key = ['^GSPC', '^IXIC', '^KLSE', '^STI', 'GC=F', 'CL=F', 'SGD=X', 'MYR=X'].map(macroRow).filter(Boolean);
   const outlook = key.map(r => {
     const f = h => r.fc?.[h] ? `<b class="${r.fc[h].up >= .55 ? 'up' : r.fc[h].up <= .45 ? 'down' : 'flat'}">${pctp(r.fc[h].up)}</b> <span class="dim">${px(r.fc[h].lo)}–${px(r.fc[h].hi)}</span>` : '–';
@@ -603,7 +619,7 @@ VIEWS.mkt = async (_, main) => {
     <div class="grid wide">
       ${panel('Outlook · next days / weeks / months', `<div class="tw"><table><thead><tr><th>Market</th><th>Last</th><th class="l" title="Current trend state. Probabilities to the right are what historically happened next, which can differ (e.g. oversold bounces).">Trend now</th><th>~1 week: P(up) · range</th><th>~1 month</th><th>~3 months</th></tr></thead><tbody>${outlook}</tbody></table></div>
         <div class="pb note">How this works: each day we score the trend (moving averages, MACD, RSI, momentum) from −100 to +100, then look up how often prices rose after the same score over the last 2 years, and the typical range (68% band). Model track record: ${track}</div>`, '', 'span')}
-      ${Object.entries(S.macro).map(([g, rows]) => panel(esc(g), tbl(rows))).join('')}
+      ${Object.entries(S.macro).filter(([g]) => !ASSETS.some(a => a[1] === g)).map(([g, rows]) => panel(esc(g), macroTbl(rows))).join('')}
       <div id="breadth" class="span"></div>
       ${['US', 'MY', 'SG', 'GL'].filter(m => S.movers[`${m}-up`]).map(m => panel(`${MKT[m]} · top compliant movers`, `<div class="grid" style="gap:0">${moverTable(S.movers[`${m}-up`], 'Gainers')}${moverTable(S.movers[`${m}-down`], 'Losers')}</div>`)).join('')}
     </div>`;
