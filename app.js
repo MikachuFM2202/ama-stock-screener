@@ -69,7 +69,7 @@ function macroRow(s) { for (const rows of Object.values(D.summary.macro)) { cons
 // ---------------------------------------------------------------- GitHub (family data on the `data` branch)
 let TOKEN = null, CFG = {};  // CFG: family settings sealed in vault.bin (token, optional worker)
 async function gh(path, opt = {}) {
-  const r = await fetch(`https://api.github.com/repos/${REPO}/${path}`, { ...opt, headers: {
+  const r = await fetch(`https://api.github.com/repos/${REPO}${path ? '/' + path : ''}`, { ...opt, headers: {
     Authorization: `Bearer ${TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(opt.headers || {}) } });
   if (!r.ok) throw Object.assign(new Error(`GitHub ${r.status}`), { status: r.status });
   return r;
